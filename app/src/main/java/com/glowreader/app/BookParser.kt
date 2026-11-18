@@ -60,20 +60,20 @@ object BookParser {
         }
     }
 
-    fun parseBook(context: Context, uri: Uri): Pair<ParsedBook, String> {
+    fun parseBook(context: Context, uri: Uri): ParsedBook {
         return try {
             val fileName = getFileName(context, uri)
             val lowerName = fileName.lowercase()
             when {
-                lowerName.endsWith(".pdf") -> parsePdf(context, uri, fileName) to "PDF"
-                lowerName.endsWith(".epub") -> parseEpub(context, uri, fileName) to "EPUB"
-                else -> parseTxt(context, uri, fileName) to "TXT"
+                lowerName.endsWith(".pdf") -> parsePdf(context, uri, fileName)
+                lowerName.endsWith(".epub") -> parseEpub(context, uri, fileName)
+                else -> parseTxt(context, uri, fileName)
             }
         } catch (e: Exception) {
             ParsedBook(
                 title = "Erro ao abrir",
                 chapters = listOf(BookChapter("Aviso", "Erro ao processar ficheiro: ${e.message}"))
-            ) to "ERRO"
+            )
         }
     }
 
@@ -231,28 +231,28 @@ object BookParser {
         val factory = XmlPullParserFactory.newInstance()
         val parser = factory.newPullParser()
         parser.setInput(xml.reader())
-var event = parser.eventType
-var currentLabel = ""
-var inText = false
-while (event != XmlPullParser.END_DOCUMENT) {
-when (event) {
-XmlPullParser.START_TAG -> {
-if (parser.name == "text") inText = true
-if (parser.name == "content") {
-val src = parser.getAttributeValue(null, "src")?.substringAfterLast("/")?.substringBefore("#")
-if (src != null && currentLabel.isNotBlank() && !tocTitles.containsKey(src)) {
-tocTitles[src] = currentLabel.trim()
-}
-}
-}
-XmlPullParser.TEXT -> {
-if (inText) currentLabel = parser.text ?: ""
-}
-XmlPullParser.END_TAG -> {
-if (parser.name == "text") inText = false
-}
-}
-event = parser.next()
-}
-}
+        var event = parser.eventType
+        var currentLabel = ""
+        var inText = false
+        while (event != XmlPullParser.END_DOCUMENT) {
+            when (event) {
+                XmlPullParser.START_TAG -> {
+                    if (parser.name == "text") inText = true
+                    if (parser.name == "content") {
+                        val src = parser.getAttributeValue(null, "src")?.substringAfterLast("/")?.substringBefore("#")
+                        if (src != null && currentLabel.isNotBlank() && !tocTitles.containsKey(src)) {
+                            tocTitles[src] = currentLabel.trim()
+                        }
+                    }
+                }
+                XmlPullParser.TEXT -> {
+                    if (inText) currentLabel = parser.text ?: ""
+                }
+                XmlPullParser.END_TAG -> {
+                    if (parser.name == "text") inText = false
+                }
+            }
+            event = parser.next()
+        }
+    }
 }
