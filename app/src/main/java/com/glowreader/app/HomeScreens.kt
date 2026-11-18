@@ -100,7 +100,12 @@ fun LibraryScreen(
         Spacer(modifier = Modifier.height(16.dp))
 
         if (isImporting) {
-            Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(32.dp),
+                contentAlignment = Alignment.Center
+            ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     CircularProgressIndicator(color = Color(0xFF4F46E5))
                     Spacer(modifier = Modifier.height(8.dp))
@@ -111,8 +116,16 @@ fun LibraryScreen(
 
         if (books.isEmpty() && !isImporting) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) {
-                    Icon(Icons.Rounded.AutoStories, null, modifier = Modifier.size(64.dp), tint = theme.text.copy(alpha = 0.3f))
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(24.dp)
+                ) {
+                    Icon(
+                        Icons.Rounded.AutoStories,
+                        null,
+                        modifier = Modifier.size(64.dp),
+                        tint = theme.text.copy(alpha = 0.3f)
+                    )
                     Spacer(modifier = Modifier.height(12.dp))
                     Text("A tua estante está vazia", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = theme.text)
                     Spacer(modifier = Modifier.height(6.dp))
@@ -124,7 +137,10 @@ fun LibraryScreen(
                 }
             }
         } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxSize()) {
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxSize()
+            ) {
                 items(books) { book ->
                     val progressPct = if (book.totalChapters > 0) {
                         (((book.lastChapterIndex + 1).toFloat() / book.totalChapters) * 100).toInt()
@@ -134,14 +150,19 @@ fun LibraryScreen(
                         shape = RoundedCornerShape(16.dp),
                         color = theme.barBg,
                         shadowElevation = 2.dp,
-                        modifier = Modifier.fillMaxWidth().clickable { onOpenBook(book) }
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onOpenBook(book) }
                     ) {
                         Row(
                             modifier = Modifier.padding(16.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
                                 Box(
                                     modifier = Modifier
                                         .size(48.dp)
@@ -179,6 +200,7 @@ fun LibraryScreen(
         }
     }
 }
+
 @Composable
 fun NotebookScreen(
     theme: ReaderTheme,
@@ -219,8 +241,16 @@ fun NotebookScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Box(modifier = Modifier.size(14.dp).clip(CircleShape).background(badgeColor))
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(14.dp)
+                                            .clip(CircleShape)
+                                            .background(badgeColor)
+                                    )
                                     Text(
                                         text = "${item.bookTitle} • ${item.chapterTitle}",
                                         fontWeight = FontWeight.Bold,
@@ -230,7 +260,10 @@ fun NotebookScreen(
                                         color = theme.text
                                     )
                                 }
-                                IconButton(onClick = { onDeleteAnnotation(item.id) }, modifier = Modifier.size(24.dp)) {
+                                IconButton(
+                                    onClick = { onDeleteAnnotation(item.id) },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
                                     Icon(Icons.Rounded.DeleteOutline, "Apagar", tint = theme.text.copy(alpha = 0.5f))
                                 }
                             }
@@ -284,8 +317,15 @@ fun SettingsScreen(
         }
 
         item {
-            Surface(shape = RoundedCornerShape(16.dp), color = theme.barBg, modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = theme.barBg,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
                     Text("Tema Visual do App", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = theme.text)
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         ReaderTheme.values().forEach { t ->
@@ -294,11 +334,21 @@ fun SettingsScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(12.dp))
-                                    .border(if (selected) 2.dp else 1.dp, if (selected) Color(0xFF4F46E5) else Color.Gray.copy(0.3f), RoundedCornerShape(12.dp))
+                                    .border(
+                                        width = if (selected) 2.dp else 1.dp,
+                                        color = if (selected) Color(0xFF4F46E5) else Color.Gray.copy(0.3f),
+                                        shape = RoundedCornerShape(12.dp)
+                                    )
                                     .clickable { onThemeChange(t) }
                                     .padding(horizontal = 12.dp, vertical = 8.dp)
                             ) {
-                                Box(modifier = Modifier.size(18.dp).clip(CircleShape).background(t.bg).border(1.dp, Color.Gray, CircleShape))
+                                Box(
+                                    modifier = Modifier
+                                        .size(18.dp)
+                                        .clip(CircleShape)
+                                        .background(t.bg)
+                                        .border(1.dp, Color.Gray, CircleShape)
+                                )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(t.label, fontSize = 13.sp, color = theme.text)
                             }
@@ -309,10 +359,20 @@ fun SettingsScreen(
         }
 
         item {
-            Surface(shape = RoundedCornerShape(16.dp), color = theme.barBg, modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = theme.barBg,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
                     Text("Idioma e Vozes Offline", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = theme.text)
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
                         languages.take(3).forEach { (label, loc) ->
                             FilterChip(
                                 selected = selectedLocale.language == loc.language && selectedLocale.country == loc.country,
@@ -321,7 +381,10 @@ fun SettingsScreen(
                             )
                         }
                     }
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
                         languages.drop(3).forEach { (label, loc) ->
                             FilterChip(
                                 selected = selectedLocale.language == loc.language,
@@ -336,7 +399,9 @@ fun SettingsScreen(
                             val intent = Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA).apply {
                                 flags = Intent.FLAG_ACTIVITY_NEW_TASK
                             }
-                            try { context.startActivity(intent) } catch (_: Exception) {}
+                            try {
+                                context.startActivity(intent)
+                            } catch (_: Exception) {}
                         },
                         modifier = Modifier.fillMaxWidth()
                     ) {
@@ -357,7 +422,9 @@ fun SettingsScreen(
                 Surface(
                     shape = RoundedCornerShape(10.dp),
                     color = if (isSelected) theme.highlightBg.copy(alpha = 0.4f) else theme.barBg,
-                    modifier = Modifier.fillMaxWidth().clickable { onVoiceSelect(voice) }
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onVoiceSelect(voice) }
                 ) {
                     Row(
                         modifier = Modifier.padding(12.dp),
@@ -365,27 +432,36 @@ fun SettingsScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text("${voice.locale.displayLanguage} • ${voice.name.takeLast(16)}", fontSize = 13.sp, color = theme.text)
-                        if (isSelected) Icon(Icons.Rounded.Check, null, tint = Color(0xFF4F46E5))
+                        if (isSelected) {
+                            Icon(Icons.Rounded.Check, null, tint = Color(0xFF4F46E5))
+                        }
                     }
                 }
             }
         }
 
         item {
-            Surface(shape = RoundedCornerShape(16.dp), color = theme.barBg, modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = theme.barBg,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
                     Text("Dicionário e Tradutor Padrão", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = theme.text)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                      dictionaries.forEach { dict ->
-                        FilterChip(
-                          selected = dictionaryProvider == dict,
-                          onClick = { onDictionaryChange(dict) },
-                          label = { Text(dict, fontSize = 11.sp) }
-                        )
-}
-}
-}
-}
-}
-}
+                        dictionaries.forEach { dict ->
+                            FilterChip(
+                                selected = dictionaryProvider == dict,
+                                onClick = { onDictionaryChange(dict) },
+                                label = { Text(dict, fontSize = 11.sp) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
