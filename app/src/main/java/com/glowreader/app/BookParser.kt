@@ -1,12 +1,15 @@
 package com.glowreader.app
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.RectF
 import android.net.Uri
 import android.provider.OpenableColumns
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.io.MemoryUsageSetting
 import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.rendering.PDFRenderer
 import com.tom_roush.pdfbox.text.PDFTextStripperByArea
 import org.jsoup.Jsoup
 import org.xmlpull.v1.XmlPullParser
@@ -22,7 +25,8 @@ data class BookChapter(
 
 data class ParsedBook(
     val title: String,
-    val chapters: List<BookChapter>
+    val chapters: List<BookChapter>,
+    val coverBitmap: Bitmap? = null
 )
 
 object BookParser {
@@ -60,20 +64,25 @@ object BookParser {
         }
     }
 
-    fun parseBook(context: Context, uri: Uri): ParsedBook {
+    fun parseBook(context: Context, uri: Uri): Pair<ParsedBook, String> {
         return try {
             val fileName = getFileName(context, uri)
+            val mimeType = context.contentResolver.getType(uri)?.lowercase() ?: ""
             val lowerName = fileName.lowercase()
+
             when {
-                lowerName.endsWith(".pdf") -> parsePdf(context, uri, fileName)
-                lowerName.endsWith(".epub") -> parseEpub(context, uri, fileName)
-                else -> parseTxt(context, uri, fileName)
+                lowerName.endsWith(".pdf") || mimeType.contains("pdf") ->
+                    parsePdf(context, uri, fileName) to "PDF"
+                lowerName.endsWith(".epub") || mimeType.contains("epub") ->
+                    parseEpub(context, uri, fileName) to "EPUB"
+                else ->
+                    parseTxt(context, uri, fileName) to "TXT"
             }
         } catch (e: Exception) {
             ParsedBook(
                 title = "Erro ao abrir",
                 chapters = listOf(BookChapter("Aviso", "Erro ao processar ficheiro: ${e.message}"))
-            )
+            ) to "ERRO"
         }
     }
 
@@ -107,8 +116,17 @@ object BookParser {
     private fun parsePdf(context: Context, uri: Uri, title: String): ParsedBook {
         PDFBoxResourceLoader.init(context)
         val chapters = mutableListOf<BookChapter>()
+        var coverBitmap: Bitmap? = null
+
         context.contentResolver.openInputStream(uri)?.use { stream ->
             PDDocument.load(stream, MemoryUsageSetting.setupTempFileOnly()).use { document ->
+                if (document.numberOfPages > 0) {
+                    try {
+                        val renderer = PDFRenderer(document)
+                        coverBitmap = renderer.renderImageWithDPI(0, 72f)
+                    } catch (_: Exception) {}
+                }
+
                 val stripper = PDFTextStripperByArea()
                 val totalPages = document.numberOfPages.coerceAtMost(350)
                 for (i in 0 until totalPages) {
@@ -132,7 +150,7 @@ object BookParser {
         if (chapters.isEmpty()) {
             chapters.add(BookChapter("Página 1", "Este PDF contém apenas imagens sem texto selecionável."))
         }
-        return ParsedBook(title.substringBeforeLast("."), chapters)
+        return ParsedBook(title.substringBeforeLast("."), chapters, coverBitmap)
     }
 
     private fun parseEpub(context: Context, uri: Uri, title: String): ParsedBook {
@@ -140,34 +158,43 @@ object BookParser {
         val spineOrder = mutableListOf<String>()
         val manifestMap = mutableMapOf<String, String>()
         val tocTitles = mutableMapOf<String, String>()
+        var coverBitmap: Bitmap? = null
 
         context.contentResolver.openInputStream(uri)?.use { stream ->
             ZipInputStream(stream).use { zip ->
                 var entry = zip.nextEntry
                 while (entry != null) {
                     val entryName = entry.name
-                    val isTextFile = entryName.endsWith(".opf", true) ||
-                            entryName.endsWith(".ncx", true) ||
-                            entryName.endsWith(".html", true) ||
-                            entryName.endsWith(".xhtml", true) ||
-                            entryName.endsWith(".htm", true)
+                    val lower = entryName.lowercase()
+                    val isTextFile = lower.endsWith(".opf") || lower.endsWith(".ncx") ||
+                            lower.endsWith(".html") || lower.endsWith(".xhtml") || lower.endsWith(".htm")
+                    val isCoverImage = coverBitmap == null &&
+                            (lower.contains("cover") || lower.contains("capa")) &&
+                            (lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png"))
 
-                    if (!entry.isDirectory && isTextFile) {
-                        val contentStr = zip.bufferedReader(Charsets.UTF_8).readText()
-                        when {
-                            entryName.endsWith(".opf", true) -> parseOpf(contentStr, manifestMap, spineOrder)
-                            entryName.endsWith(".ncx", true) -> parseNcx(contentStr, tocTitles)
-                            else -> {
-                                val cleanName = entryName.substringAfterLast("/")
-                                val doc = Jsoup.parse(contentStr)
-                                doc.select("header, footer, nav, sup, .pagenum").remove()
-                                val plainText = doc.select("p, h1, h2, h3, h4, div").eachText()
-                                    .filter { it.isNotBlank() }
-                                    .joinToString("\n\n")
-                                    .ifBlank { doc.body().text() }
-                                val cleaned = cleanTextNoise(plainText)
-                                if (cleaned.isNotBlank()) {
-                                    htmlFiles[cleanName] = cleaned
+                    if (!entry.isDirectory) {
+                        if (isCoverImage) {
+                            try {
+                                val imgBytes = zip.readBytes()
+                                coverBitmap = BitmapFactory.decodeByteArray(imgBytes, 0, imgBytes.size)
+                            } catch (_: Exception) {}
+                        } else if (isTextFile) {
+                            val contentStr = zip.bufferedReader(Charsets.UTF_8).readText()
+                            when {
+                                lower.endsWith(".opf") -> parseOpf(contentStr, manifestMap, spineOrder)
+                                lower.endsWith(".ncx") -> parseNcx(contentStr, tocTitles)
+                                else -> {
+                                    val cleanName = entryName.substringAfterLast("/")
+                                    val doc = Jsoup.parse(contentStr)
+                                    doc.select("header, footer, nav, sup, .pagenum").remove()
+                                    val plainText = doc.select("p, h1, h2, h3, h4, div").eachText()
+                                        .filter { it.isNotBlank() }
+                                        .joinToString("\n\n")
+                                        .ifBlank { doc.body().text() }
+                                    val cleaned = cleanTextNoise(plainText)
+                                    if (cleaned.isNotBlank()) {
+                                        htmlFiles[cleanName] = cleaned
+                                    }
                                 }
                             }
                         }
@@ -199,60 +226,57 @@ object BookParser {
 
         if (chapters.isEmpty()) {
             chapters.add(BookChapter("Início", "Não foi possível extrair capítulos deste EPUB."))
-        }
-
-        return ParsedBook(title.substringBeforeLast("."), chapters)
-    }
-
-    private fun parseOpf(xml: String, manifest: MutableMap<String, String>, spine: MutableList<String>) {
-        val factory = XmlPullParserFactory.newInstance()
-        val parser = factory.newPullParser()
-        parser.setInput(xml.reader())
-        var event = parser.eventType
-        while (event != XmlPullParser.END_DOCUMENT) {
-            if (event == XmlPullParser.START_TAG) {
-                when (parser.name) {
-                    "item" -> {
-                        val id = parser.getAttributeValue(null, "id")
-                        val href = parser.getAttributeValue(null, "href")
-                        if (id != null && href != null) manifest[id] = href
-                    }
-                    "itemref" -> {
-                        val idref = parser.getAttributeValue(null, "idref")
-                        if (idref != null) spine.add(idref)
-                    }
-                }
-            }
-            event = parser.next()
-        }
-    }
-
-    private fun parseNcx(xml: String, tocTitles: MutableMap<String, String>) {
-        val factory = XmlPullParserFactory.newInstance()
-        val parser = factory.newPullParser()
-        parser.setInput(xml.reader())
-        var event = parser.eventType
-        var currentLabel = ""
-        var inText = false
-        while (event != XmlPullParser.END_DOCUMENT) {
-            when (event) {
-                XmlPullParser.START_TAG -> {
-                    if (parser.name == "text") inText = true
-                    if (parser.name == "content") {
-                        val src = parser.getAttributeValue(null, "src")?.substringAfterLast("/")?.substringBefore("#")
-                        if (src != null && currentLabel.isNotBlank() && !tocTitles.containsKey(src)) {
-                            tocTitles[src] = currentLabel.trim()
-                        }
-                    }
-                }
-                XmlPullParser.TEXT -> {
-                    if (inText) currentLabel = parser.text ?: ""
-                }
-                XmlPullParser.END_TAG -> {
-                    if (parser.name == "text") inText = false
-                }
-            }
-            event = parser.next()
-        }
-    }
+}
+return ParsedBook(title.substringBeforeLast("."), chapters, coverBitmap)
+}
+private fun parseOpf(xml: String, manifest: MutableMap<String, String>, spine: MutableList) {
+val factory = XmlPullParserFactory.newInstance()
+val parser = factory.newPullParser()
+parser.setInput(xml.reader())
+var event = parser.eventType
+while (event != XmlPullParser.END_DOCUMENT) {
+if (event == XmlPullParser.START_TAG) {
+when (parser.name) {
+"item" -> {
+val id = parser.getAttributeValue(null, "id")
+val href = parser.getAttributeValue(null, "href")
+if (id != null && href != null) manifest[id] = href
+}
+"itemref" -> {
+val idref = parser.getAttributeValue(null, "idref")
+if (idref != null) spine.add(idref)
+}
+}
+}
+event = parser.next()
+}
+}
+private fun parseNcx(xml: String, tocTitles: MutableMap<String, String>) {
+val factory = XmlPullParserFactory.newInstance()
+val parser = factory.newPullParser()
+parser.setInput(xml.reader())
+var event = parser.eventType
+var currentLabel = ""
+var inText = false
+while (event != XmlPullParser.END_DOCUMENT) {
+when (event) {
+XmlPullParser.START_TAG -> {
+if (parser.name == "text") inText = true
+if (parser.name == "content") {
+val src = parser.getAttributeValue(null, "src")?.substringAfterLast("/")?.substringBefore("#")
+if (src != null && currentLabel.isNotBlank() && !tocTitles.containsKey(src)) {
+tocTitles[src] = currentLabel.trim()
+}
+}
+}
+XmlPullParser.TEXT -> {
+if (inText) currentLabel = parser.text ?: ""
+}
+XmlPullParser.END_TAG -> {
+if (parser.name == "text") inText = false
+}
+}
+event = parser.next()
+}
+}
 }
