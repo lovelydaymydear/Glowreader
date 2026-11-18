@@ -112,7 +112,8 @@ class MainActivity : ComponentActivity() {
             var speechRate by remember { mutableFloatStateOf(1.0f) }
             var ttsReady by remember { mutableStateOf(false) }
             var nativeRangeWorked by remember { mutableStateOf(false) }
-                        DisposableEffect(Unit) {
+
+            DisposableEffect(Unit) {
                 val engine = TextToSpeech(context) { status ->
                     if (status == TextToSpeech.SUCCESS) {
                         tts?.language = selectedLocale
@@ -139,7 +140,6 @@ class MainActivity : ComponentActivity() {
                 onDispose { engine.stop(); engine.shutdown() }
             }
 
-            // Rastreador universal caso o motor TTS do telemóvel não envie onRangeStart
             LaunchedEffect(isPlaying, textContent, speechRate) {
                 if (isPlaying && textContent.isNotBlank()) {
                     delay(450)
@@ -252,7 +252,8 @@ class MainActivity : ComponentActivity() {
                     onDismiss = { showSettingsSheet = false }
                 )
             }
-                        if (showNoteDialog) {
+
+            if (showNoteDialog) {
                 AlertDialog(
                     onDismissRequest = { showNoteDialog = false },
                     title = { Text("Destacar, Traduzir ou Anotar") },
@@ -417,6 +418,78 @@ class MainActivity : ComponentActivity() {
                                 IconButton(onClick = { showSettingsSheet = true }, modifier = Modifier.size(36.dp)) {
                                     Icon(Icons.Rounded.Settings, "Definições", tint = currentTheme.text)
                                 }
-                                IconButton(onClick = {
+                            }
+                        }
 
+                        Spacer(modifier = Modifier.height(24.dp))
 
+                        SelectionContainer {
+                            val annotatedString = buildAnnotatedString {
+                                append(textContent)
+                            }
+                            Text(
+                                text = annotatedString,
+                                fontSize = fontSize.sp,
+                                color = currentTheme.text,
+                                lineHeight = (fontSize * 1.4f).sp
+                            )
+                        }
+                    }
+
+                    // Bottom Bar de Leitura & Controlo de Áudio
+                    Surface(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        shape = RoundedCornerShape(24.dp),
+                        color = currentTheme.barBg,
+                        shadowElevation = 8.dp
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(onClick = { filePicker.launch(arrayOf("application/epub+zip", "application/pdf", "text/plain")) }) {
+                                Icon(Icons.Rounded.FolderOpen, "Abrir Livro", tint = currentTheme.text)
+                            }
+                            IconButton(onClick = {
+                                if (currentChapterIndex > 0) {
+                                    stopAudio()
+                                    currentChapterIndex--
+                                    scope.launch { scrollState.scrollTo(0) }
+                                }
+                            }) {
+                                Icon(Icons.Rounded.SkipPrevious, "Capítulo Anterior", tint = currentTheme.text)
+                            }
+                            FloatingActionButton(
+                                onClick = { togglePlay() },
+                                containerColor = currentTheme.highlightBg,
+                                contentColor = currentTheme.highlightText,
+                                modifier = Modifier.size(52.dp),
+                                shape = CircleShape
+                            ) {
+                                Icon(if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, "Play/Pause")
+                            }
+                            IconButton(onClick = {
+                                if (currentChapterIndex < currentBook.chapters.size - 1) {
+                                    stopAudio()
+                                    currentChapterIndex++
+                                    scope.launch { scrollState.scrollTo(0) }
+                                }
+                            }) {
+                                Icon(Icons.Rounded.SkipNext, "Capítulo Seguinte", tint = currentTheme.text)
+                            }
+                            IconButton(onClick = {
+                                if (currentChapterIndex > 0) currentChapterIndex--
+                            }) {
+                                Icon(Icons.Rounded.Bookmark, "Progresso", tint = currentTheme.text)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
