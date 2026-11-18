@@ -1,13 +1,14 @@
 package com.glowreader.app
 
 import android.content.Context
+import android.graphics.RectF
 import android.net.Uri
 import android.provider.OpenableColumns
-import android.text.Html
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.io.MemoryUsageSetting
 import com.tom_roush.pdfbox.pdmodel.PDDocument
-import com.tom_roush.pdfbox.text.PDFTextStripper
+import com.tom_roush.pdfbox.text.PDFTextStripperByArea
+import org.jsoup.Jsoup
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
 import java.io.BufferedReader
@@ -26,21 +27,63 @@ data class ParsedBook(
 
 object BookParser {
 
-    fun parseBook(context: Context, uri: Uri): ParsedBook {
+    fun parseWebUrl(url: String): ParsedBook {
+        return try {
+            val doc = Jsoup.connect(url)
+                .userAgent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
+                .timeout(15000)
+                .get()
+
+            doc.select("script, style, nav, header, footer, aside, .ads, .menu, .comments").remove()
+            val pageTitle = doc.title().ifBlank { "Artigo Web" }
+
+            val paragraphs = doc.select("article p, main p, .chapter-content p, .entry-content p, p")
+                .map { it.text().trim() }
+                .filter { it.length > 25 }
+                .distinct()
+
+            val cleanBody = if (paragraphs.isNotEmpty()) {
+                paragraphs.joinToString("\n\n")
+            } else {
+                doc.body().text()
+            }
+
+            ParsedBook(
+                title = pageTitle.take(60),
+                chapters = listOf(BookChapter(pageTitle, cleanTextNoise(cleanBody)))
+            )
+        } catch (e: Exception) {
+            ParsedBook(
+                title = "Erro no Link",
+                chapters = listOf(BookChapter("Falha ao carregar", "Não foi possível extrair o texto deste link: ${e.message}"))
+            )
+        }
+    }
+
+    fun parseBook(context: Context, uri: Uri): Pair<ParsedBook, String> {
         return try {
             val fileName = getFileName(context, uri)
             val lowerName = fileName.lowercase()
             when {
-                lowerName.endsWith(".pdf") -> parsePdf(context, uri, fileName)
-                lowerName.endsWith(".epub") -> parseEpub(context, uri, fileName)
-                else -> parseTxt(context, uri, fileName)
+                lowerName.endsWith(".pdf") -> parsePdf(context, uri, fileName) to "PDF"
+                lowerName.endsWith(".epub") -> parseEpub(context, uri, fileName) to "EPUB"
+                else -> parseTxt(context, uri, fileName) to "TXT"
             }
         } catch (e: Exception) {
             ParsedBook(
                 title = "Erro ao abrir",
-                chapters = listOf(BookChapter("Aviso", "Não foi possível processar este ficheiro: ${e.message}"))
-            )
+                chapters = listOf(BookChapter("Aviso", "Erro ao processar ficheiro: ${e.message}"))
+            ) to "ERRO"
         }
+    }
+
+    private fun cleanTextNoise(raw: String): String {
+        return raw.lines()
+            .map { it.trim() }
+            .filter { line ->
+                line.isNotEmpty() && !line.matches(Regex("^\\d+$")) && !line.matches(Regex("^(Pág\\.|Página|Page)\\s*\\d+.*$", RegexOption.IGNORE_CASE))
+            }
+            .joinToString("\n")
     }
 
     private fun getFileName(context: Context, uri: Uri): String {
@@ -58,7 +101,7 @@ object BookParser {
         val text = context.contentResolver.openInputStream(uri)?.use { stream ->
             BufferedReader(InputStreamReader(stream)).readText()
         } ?: ""
-        return ParsedBook(title.substringBeforeLast("."), listOf(BookChapter("Texto Completo", text)))
+        return ParsedBook(title.substringBeforeLast("."), listOf(BookChapter("Texto Completo", cleanTextNoise(text))))
     }
 
     private fun parsePdf(context: Context, uri: Uri, title: String): ParsedBook {
@@ -66,22 +109,28 @@ object BookParser {
         val chapters = mutableListOf<BookChapter>()
         context.contentResolver.openInputStream(uri)?.use { stream ->
             PDDocument.load(stream, MemoryUsageSetting.setupTempFileOnly()).use { document ->
-                val stripper = PDFTextStripper()
-                val totalPages = document.numberOfPages.coerceAtMost(300)
-                for (page in 1..totalPages) {
-                    stripper.startPage = page
-                    stripper.endPage = page
-                    val pageText = stripper.getText(document).trim()
-                    if (pageText.isNotEmpty()) {
-                        val firstLine = pageText.lines().firstOrNull { it.trim().length in 3..45 }?.trim()
-                        val chapterTitle = if (firstLine != null) "Pág. $page - $firstLine" else "Página $page"
-                        chapters.add(BookChapter(chapterTitle, pageText))
+                val stripper = PDFTextStripperByArea()
+                val totalPages = document.numberOfPages.coerceAtMost(350)
+                for (i in 0 until totalPages) {
+                    val page = document.getPage(i)
+                    val box = page.mediaBox
+                    val topMargin = box.height * 0.08f
+                    val bottomMargin = box.height * 0.08f
+                    val contentRect = RectF(0f, topMargin, box.width, box.height - bottomMargin)
+                    stripper.addRegion("body", contentRect)
+                    stripper.extractRegions(page)
+                    val rawText = stripper.getTextForRegion("body").trim()
+                    val cleaned = cleanTextNoise(rawText)
+                    if (cleaned.isNotEmpty()) {
+                        val firstLine = cleaned.lines().firstOrNull { it.length in 3..45 }
+                        val chTitle = if (firstLine != null) "Pág. ${i + 1} • $firstLine" else "Página ${i + 1}"
+                        chapters.add(BookChapter(chTitle, cleaned))
                     }
                 }
             }
         }
         if (chapters.isEmpty()) {
-            chapters.add(BookChapter("Página 1", "Este PDF parece ser composto apenas por imagens digitalizadas sem texto selecionável."))
+            chapters.add(BookChapter("Página 1", "Este PDF contém apenas imagens sem texto selecionável."))
         }
         return ParsedBook(title.substringBeforeLast("."), chapters)
     }
@@ -110,9 +159,15 @@ object BookParser {
                             entryName.endsWith(".ncx", true) -> parseNcx(contentStr, tocTitles)
                             else -> {
                                 val cleanName = entryName.substringAfterLast("/")
-                                val plainText = Html.fromHtml(contentStr, Html.FROM_HTML_MODE_COMPACT).toString().trim()
-                                if (plainText.isNotBlank()) {
-                                    htmlFiles[cleanName] = plainText
+                                val doc = Jsoup.parse(contentStr)
+                                doc.select("header, footer, nav, sup, .pagenum").remove()
+                                val plainText = doc.select("p, h1, h2, h3, h4, div").eachText()
+                                    .filter { it.isNotBlank() }
+                                    .joinToString("\n\n")
+                                    .ifBlank { doc.body().text() }
+                                val cleaned = cleanTextNoise(plainText)
+                                if (cleaned.isNotBlank()) {
+                                    htmlFiles[cleanName] = cleaned
                                 }
                             }
                         }
@@ -176,29 +231,28 @@ object BookParser {
         val factory = XmlPullParserFactory.newInstance()
         val parser = factory.newPullParser()
         parser.setInput(xml.reader())
-        var event = parser.eventType
-        var currentLabel = ""
-        var inText = false
-
-        while (event != XmlPullParser.END_DOCUMENT) {
-            when (event) {
-                XmlPullParser.START_TAG -> {
-                    if (parser.name == "text") inText = true
-                    if (parser.name == "content") {
-                        val src = parser.getAttributeValue(null, "src")?.substringAfterLast("/")?.substringBefore("#")
-                        if (src != null && currentLabel.isNotBlank() && !tocTitles.containsKey(src)) {
-                            tocTitles[src] = currentLabel.trim()
-                        }
-                    }
-                }
-                XmlPullParser.TEXT -> {
-                    if (inText) currentLabel = parser.text ?: ""
-                }
-                XmlPullParser.END_TAG -> {
-                    if (parser.name == "text") inText = false
-                }
-            }
-            event = parser.next()
-        }
-    }
+var event = parser.eventType
+var currentLabel = ""
+var inText = false
+while (event != XmlPullParser.END_DOCUMENT) {
+when (event) {
+XmlPullParser.START_TAG -> {
+if (parser.name == "text") inText = true
+if (parser.name == "content") {
+val src = parser.getAttributeValue(null, "src")?.substringAfterLast("/")?.substringBefore("#")
+if (src != null && currentLabel.isNotBlank() && !tocTitles.containsKey(src)) {
+tocTitles[src] = currentLabel.trim()
+}
+}
+}
+XmlPullParser.TEXT -> {
+if (inText) currentLabel = parser.text ?: ""
+}
+XmlPullParser.END_TAG -> {
+if (parser.name == "text") inText = false
+}
+}
+event = parser.next()
+}
+}
 }
