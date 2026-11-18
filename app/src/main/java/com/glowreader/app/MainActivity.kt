@@ -62,7 +62,7 @@ class MainActivity : ComponentActivity() {
             val clipboard = LocalClipboardManager.current
             val scope = rememberCoroutineScope()
 
-            var currentTab by remember { mutableIntStateOf(0) } // 0: Biblioteca, 1: Caderno, 2: Definições
+            var currentTab by remember { mutableIntStateOf(0) }
             var currentTheme by remember { mutableStateOf(ReaderTheme.SEPIA) }
             var fontSize by remember { mutableFloatStateOf(19f) }
             var currentFont by remember { mutableStateOf(ReaderFont.SERIF) }
@@ -155,9 +155,14 @@ class MainActivity : ComponentActivity() {
                 uri?.let {
                     isImporting = true
                     scope.launch {
-                        val (parsed, format) = withContext(Dispatchers.IO) { BookParser.parseBook(context, it) }
-                        if (format != "ERRO") {
-                            withContext(Dispatchers.IO) { LibraryManager.saveBookToLibrary(context, parsed, format) }
+                        val parsedBook = withContext(Dispatchers.IO) { BookParser.parseBook(context, it) }
+                        if (parsedBook.chapters.isNotEmpty()) {
+                            val format = when {
+                                it.toString().endsWith(".epub", true) -> "EPUB"
+                                it.toString().endsWith(".pdf", true) -> "PDF"
+                                else -> "TXT"
+                            }
+                            withContext(Dispatchers.IO) { LibraryManager.saveBookToLibrary(context, parsedBook, format) }
                             savedBooks = LibraryManager.loadLibrary(context)
                         }
                         isImporting = false
@@ -182,7 +187,6 @@ class MainActivity : ComponentActivity() {
                 var draftColor by remember { mutableStateOf(HighlightColor.YELLOW) }
                 var draftUnderline by remember { mutableStateOf(false) }
 
-                // Guarda automaticamente a posição exata ao sair ou mudar de capítulo
                 DisposableEffect(currentChapterIndex) {
                     onDispose {
                         LibraryManager.updateReadingProgress(context, currentMeta.id, currentChapterIndex, scrollState.value)
@@ -190,7 +194,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                // Faz scroll suave automático acompanhando a leitura em voz alta
                 LaunchedEffect(activeSentenceRange) {
                     val range = activeSentenceRange
                     if (range != null && textContent.isNotEmpty() && scrollState.maxValue > 0) {
@@ -200,7 +203,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                // Deteta texto copiado para mostrar barra flutuante de estudo
                 var lastClipboardText by remember { mutableStateOf(clipboard.getText()?.text ?: "") }
                 var showStudyBanner by remember { mutableStateOf(false) }
                 LaunchedEffect(Unit) {
