@@ -1,4 +1,12 @@
+name: Build GlowReader APK
 
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
     runs-on: ubuntu-latest
 
     steps:
