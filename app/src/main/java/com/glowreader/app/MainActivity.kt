@@ -34,10 +34,10 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.util.Locale
 
-enum class ReaderTheme(val label: String, val bg: Color, val text: Color, val highlightBg: Color, val highlightText: Color, val barBg: Color) {
-    LIGHT("Claro", Color(0xFFFAFAFA), Color(0xFF1E1E1E), Color(0xFFFFE082), Color(0xFF000000), Color(0xFFFFFFFF)),
-    SEPIA("Sépia", Color(0xFFF4ECD8), Color(0xFF3E3224), Color(0xFFE6C27A), Color(0xFF1F1810), Color(0xFFEBE0C5)),
-    DARK("Escuro", Color(0xFF121212), Color(0xFFE0E0E0), Color(0xFF3B4CCA), Color(0xFFFFFFFF), Color(0xFF1E1E1E))
+enum class ReaderTheme(val bg: Color, val text: Color, val hlBg: Color, val hlText: Color, val bar: Color) {
+    LIGHT(Color(0xFFFAFAFA), Color(0xFF1E1E1E), Color(0xFFFFE082), Color(0xFF000000), Color(0xFFFFFFFF)),
+    SEPIA(Color(0xFFF4ECD8), Color(0xFF3E3224), Color(0xFFE6C27A), Color(0xFF1F1810), Color(0xFFEBE0C5)),
+    DARK(Color(0xFF121212), Color(0xFFE0E0E0), Color(0xFF3B4CCA), Color(0xFFFFFFFF), Color(0xFF1E1E1E))
 }
 
 class MainActivity : ComponentActivity() {
@@ -45,229 +45,77 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
         setContent {
-            val context = LocalContext.current
-            var currentTheme by remember { mutableStateOf(ReaderTheme.SEPIA) }
-            var textContent by remember {
-                mutableStateOf(
-                    "Bem-vindo ao GlowReader! Este é o teu novo leitor moderno com destaque palavra por palavra totalmente offline.\n\n" +
-                    "Toca no ícone da pasta no canto superior direito para abrir qualquer ficheiro de texto (.txt) do teu telemóvel, ou carrega no botão Play abaixo para ouvir este texto agora mesmo.\n\n" +
-                    "Nas próximas atualizações, vamos adicionar suporte a livros EPUB e PDF, gravação de áudio offline e motores neurais como Kokoro e Edge TTS."
-                )
-            }
-            var highlightStart by remember { mutableIntStateOf(-1) }
-            var highlightEnd by remember { mutableIntStateOf(-1) }
-            var isPlaying by remember { mutableStateOf(false) }
-            var speechRate by remember { mutableFloatStateOf(1.0f) }
-            var ttsReady by remember { mutableStateOf(false) }
+            val ctx = LocalContext.current
+            var theme by remember { mutableStateOf(ReaderTheme.SEPIA) }
+            var text by remember { mutableStateOf("Bem-vindo ao GlowReader! Toca na pasta para abrir um ficheiro .txt ou carrega em Play para ouvir com destaque palavra por palavra offline.") }
+            var hlStart by remember { mutableIntStateOf(-1) }
+            var hlEnd by remember { mutableIntStateOf(-1) }
+            var playing by remember { mutableStateOf(false) }
+            var rate by remember { mutableFloatStateOf(1.0f) }
+            var ready by remember { mutableStateOf(false) }
 
             DisposableEffect(Unit) {
-                val engine = TextToSpeech(context) { status ->
-                    if (status == TextToSpeech.SUCCESS) {
-                        tts?.language = Locale("pt", "PT")
-                        ttsReady = true
-                    }
-                }
+                val engine = TextToSpeech(ctx) { if (it == TextToSpeech.SUCCESS) { tts?.language = Locale("pt", "PT"); ready = true } }
                 engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                    override fun onStart(utteranceId: String?) {
-                        isPlaying = true
-                    }
-
-                    override fun onDone(utteranceId: String?) {
-                        isPlaying = false
-                        highlightStart = -1
-                        highlightEnd = -1
-                    }
-
-                    @Deprecated("Deprecated in Java")
-                    override fun onError(utteranceId: String?) {
-                        isPlaying = false
-                    }
-
-                    override fun onRangeStart(utteranceId: String?, start: Int, end: Int, frame: Int) {
-                        highlightStart = start
-                        highlightEnd = end
-                    }
+                    override fun onStart(id: String?) { playing = true }
+                    override fun onDone(id: String?) { playing = false; hlStart = -1; hlEnd = -1 }
+                    @Deprecated("Deprecated") override fun onError(id: String?) { playing = false }
+                    override fun onRangeStart(id: String?, s: Int, e: Int, f: Int) { hlStart = s; hlEnd = e }
                 })
                 tts = engine
-                onDispose {
-                    engine.stop()
-                    engine.shutdown()
-                }
+                onDispose { engine.stop(); engine.shutdown() }
             }
 
-            val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+            val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
                 uri?.let {
-                    tts?.stop()
-                    isPlaying = false
-                    highlightStart = -1
-                    highlightEnd = -1
-                    context.contentResolver.openInputStream(it)?.use { stream ->
-                        val reader = BufferedReader(InputStreamReader(stream))
-                        textContent = reader.readText()
-                    }
+                    tts?.stop(); playing = false; hlStart = -1; hlEnd = -1
+                    ctx.contentResolver.openInputStream(it)?.use { s -> text = BufferedReader(InputStreamReader(s)).readText() }
                 }
             }
 
-            fun togglePlay() {
-                if (!ttsReady) return
-                if (isPlaying) {
-                    tts?.stop()
-                    isPlaying = false
-                } else {
-                    tts?.setSpeechRate(speechRate)
-                    val params = Bundle()
-                    tts?.speak(textContent, TextToSpeech.QUEUE_FLUSH, params, "glow_utterance")
-                }
+            fun playPause() {
+                if (!ready) return
+                if (playing) { tts?.stop(); playing = false }
+                else { tts?.setSpeechRate(rate); tts?.speak(text, TextToSpeech.QUEUE_FLUSH, Bundle(), "glow") }
             }
 
-            Surface(
-                modifier = Modifier.fillMaxSize(),
-                color = currentTheme.bg
-            ) {
-                Box(modifier = Modifier.fillMaxSize()) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 24.dp)
-                            .verticalScroll(rememberScrollState())
-                            .padding(top = 24.dp, bottom = 120.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "GlowReader",
-                                fontSize = 20.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = currentTheme.text.copy(alpha = 0.8f)
-                            )
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                IconButton(onClick = {
-                                    currentTheme = when (currentTheme) {
-                                        ReaderTheme.LIGHT -> ReaderTheme.SEPIA
-                                        ReaderTheme.SEPIA -> ReaderTheme.DARK
-                                        ReaderTheme.DARK -> ReaderTheme.LIGHT
-                                    }
-                                }) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Palette,
-                                        contentDescription = "Mudar Tema",
-                                        tint = currentTheme.text
-                                    )
+            Surface(Modifier.fillMaxSize(), color = theme.bg) {
+                Box(Modifier.fillMaxSize()) {
+                    Column(Modifier.fillMaxSize().padding(horizontal = 24.dp).verticalScroll(rememberScrollState()).padding(top = 24.dp, bottom = 120.dp)) {
+                        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                            Text("GlowReader", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = theme.text.copy(alpha = 0.8f))
+                            Row {
+                                IconButton(onClick = { theme = ReaderTheme.entries[(theme.ordinal + 1) % 3] }) {
+                                    Icon(Icons.Rounded.Palette, "Tema", tint = theme.text)
                                 }
-                                IconButton(onClick = { filePicker.launch("text/plain") }) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.FolderOpen,
-                                        contentDescription = "Abrir Ficheiro",
-                                        tint = currentTheme.text
-                                    )
+                                IconButton(onClick = { picker.launch("text/plain") }) {
+                                    Icon(Icons.Rounded.FolderOpen, "Abrir", tint = theme.text)
                                 }
                             }
                         }
-
-                        Spacer(modifier = Modifier.height(24.dp))
-
-                        val annotatedText = buildAnnotatedString {
-                            if (highlightStart >= 0 && highlightEnd <= textContent.length && highlightStart < highlightEnd) {
-                                append(textContent.substring(0, highlightStart))
-                                withStyle(
-                                    style = SpanStyle(
-                                        background = currentTheme.highlightBg,
-                                        color = currentTheme.highlightText,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                ) {
-                                    append(textContent.substring(highlightStart < highlightEnd) {
-                                append(textContent.substring(0, highlightStart))
-                                withStyle(
-                                    style = SpanStyle(
-                                        background = currentTheme.highlightBg,
-                                        color = currentTheme.highlightText,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                ) {
-                                    append(textContent.substring(highlightStart, highlightEnd))
+                        Spacer(Modifier.height(24.dp))
+                        val styled = buildAnnotatedString {
+                            if (hlStart in 0 until hlEnd && hlEnd <= text.length) {
+                                append(text.substring(0, hlStart))
+                                withStyle(SpanStyle(background = theme.hlBg, color = theme.hlText, fontWeight = FontWeight.SemiBold)) {
+                                    append(text.substring(hlStart, hlEnd))
                                 }
-                                append(textContent.substring(highlightEnd))
-                            } else {
-                                append(textContent)
-                            }
+                                append(text.substring(hlEnd))
+                            } else append(text)
                         }
-
-                        Text(
-                            text = annotatedText,
-                            fontSize = 20.sp,
-                            lineHeight = 32.sp,
-                            fontFamily = FontFamily.Serif,
-                            color = currentTheme.text
-                        )
+                        Text(styled, fontSize = 20.sp, lineHeight = 32.sp, fontFamily = FontFamily.Serif, color = theme.text)
                     }
-
-                    Surface(
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(20.dp)
-                            .fillMaxWidth(),
-                        shape = RoundedCornerShape(32.dp),
-                        color = currentTheme.barBg,
-                        shadowElevation = 8.dp
-                    ) {
-                        Row(
-                                                    modifier = Modifier
-                                .padding(horizontal = 20.dp, vertical = 12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            TextButton(onClick = {
-                                speechRate = when (speechRate) {
-                                    1.0f -> 1.25f
-                                    1.25f -> 1.5f
-                                    1.5f -> 2.0f
-                                    else -> 1.0f
-                                }
-                                if (isPlaying) {
-                                    tts?.stop()
-                                    togglePlay()
-                                }
-                            }) {
-                                Text(
-                                    text = "${speechRate}x",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 16.sp,
-                                    color = currentTheme.text
-                                )
+                    Surface(Modifier.align(Alignment.BottomCenter).padding(20.dp).fillMaxWidth(), shape = RoundedCornerShape(32.dp), color = theme.bar, shadowElevation = 8.dp) {
+                        Row(Modifier.padding(horizontal = 20.dp, vertical = 12.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                            TextButton(onClick = { rate = if (rate >= 2.0f) 1.0f else rate + 0.25f; if (playing) { tts?.stop(); playPause() } }) {
+                                Text("${rate}x", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = theme.text)
                             }
-
-                            IconButton(
-                                onClick = { togglePlay() },
-                                modifier = Modifier
-                                    .size(56.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(0xFF4F46E5))
-                            ) {
-                                Icon(
-                                    imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                                    contentDescription = "Play/Pause",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(32.dp)
-                                )
+                            IconButton(onClick = { playPause() }, Modifier.size(56.dp).clip(CircleShape).background(Color(0xFF4F46E5))) {
+                                Icon(if (playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, "Play", tint = Color.White, modifier = Modifier.size(32.dp))
                             }
-
-                            IconButton(onClick = {
-                                tts?.stop()
-                                isPlaying = false
-                                highlightStart = -1
-                                highlightEnd = -1
-                            }) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Stop,
-                                    contentDescription = "Parar",
-                                    tint = currentTheme.text
-                                )
+                            IconButton(onClick = { tts?.stop(); playing = false; hlStart = -1; hlEnd = -1 }) {
+                                Icon(Icons.Rounded.Stop, "Parar", tint = theme.text)
                             }
                         }
                     }
@@ -276,4 +124,3 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
-
