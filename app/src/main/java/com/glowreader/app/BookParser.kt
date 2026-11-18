@@ -226,57 +226,60 @@ object BookParser {
 
         if (chapters.isEmpty()) {
             chapters.add(BookChapter("Início", "Não foi possível extrair capítulos deste EPUB."))
-}
-return ParsedBook(title.substringBeforeLast("."), chapters, coverBitmap)
-}
-private fun parseOpf(xml: String, manifest: MutableMap<String, String>, spine: MutableList) {
-val factory = XmlPullParserFactory.newInstance()
-val parser = factory.newPullParser()
-parser.setInput(xml.reader())
-var event = parser.eventType
-while (event != XmlPullParser.END_DOCUMENT) {
-if (event == XmlPullParser.START_TAG) {
-when (parser.name) {
-"item" -> {
-val id = parser.getAttributeValue(null, "id")
-val href = parser.getAttributeValue(null, "href")
-if (id != null && href != null) manifest[id] = href
-}
-"itemref" -> {
-val idref = parser.getAttributeValue(null, "idref")
-if (idref != null) spine.add(idref)
-}
-}
-}
-event = parser.next()
-}
-}
-private fun parseNcx(xml: String, tocTitles: MutableMap<String, String>) {
-val factory = XmlPullParserFactory.newInstance()
-val parser = factory.newPullParser()
-parser.setInput(xml.reader())
-var event = parser.eventType
-var currentLabel = ""
-var inText = false
-while (event != XmlPullParser.END_DOCUMENT) {
-when (event) {
-XmlPullParser.START_TAG -> {
-if (parser.name == "text") inText = true
-if (parser.name == "content") {
-val src = parser.getAttributeValue(null, "src")?.substringAfterLast("/")?.substringBefore("#")
-if (src != null && currentLabel.isNotBlank() && !tocTitles.containsKey(src)) {
-tocTitles[src] = currentLabel.trim()
-}
-}
-}
-XmlPullParser.TEXT -> {
-if (inText) currentLabel = parser.text ?: ""
-}
-XmlPullParser.END_TAG -> {
-if (parser.name == "text") inText = false
-}
-}
-event = parser.next()
-}
-}
+        }
+
+        return ParsedBook(title.substringBeforeLast("."), chapters, coverBitmap)
+    }
+
+    private fun parseOpf(xml: String, manifest: MutableMap<String, String>, spine: MutableList<String>) {
+        val factory = XmlPullParserFactory.newInstance()
+        val parser = factory.newPullParser()
+        parser.setInput(xml.reader())
+        var event = parser.eventType
+        while (event != XmlPullParser.END_DOCUMENT) {
+            if (event == XmlPullParser.START_TAG) {
+                when (parser.name) {
+                    "item" -> {
+                        val id = parser.getAttributeValue(null, "id")
+                        val href = parser.getAttributeValue(null, "href")
+                        if (id != null && href != null) manifest[id] = href
+                    }
+                    "itemref" -> {
+                        val idref = parser.getAttributeValue(null, "idref")
+                        if (idref != null) spine.add(idref)
+                    }
+                }
+            }
+            event = parser.next()
+        }
+    }
+
+    private fun parseNcx(xml: String, tocTitles: MutableMap<String, String>) {
+        val factory = XmlPullParserFactory.newInstance()
+        val parser = factory.newPullParser()
+        parser.setInput(xml.reader())
+        var event = parser.eventType
+        var currentLabel = ""
+        var inText = false
+        while (event != XmlPullParser.END_DOCUMENT) {
+            when (event) {
+                XmlPullParser.START_TAG -> {
+                    if (parser.name == "text") inText = true
+                    if (parser.name == "content") {
+                        val src = parser.getAttributeValue(null, "src")?.substringAfterLast("/")?.substringBefore("#")
+                        if (src != null && currentLabel.isNotBlank() && !tocTitles.containsKey(src)) {
+                            tocTitles[src] = currentLabel.trim()
+                        }
+                    }
+                }
+                XmlPullParser.TEXT -> {
+                    if (inText) currentLabel = parser.text ?: ""
+                }
+                XmlPullParser.END_TAG -> {
+                    if (parser.name == "text") inText = false
+                }
+            }
+            event = parser.next()
+        }
+    }
 }
