@@ -418,332 +418,6 @@ class MainActivity : ComponentActivity() {
                                 IconButton(onClick = { showSettingsSheet = true }, modifier = Modifier.size(36.dp)) {
                                     Icon(Icons.Rounded.Settings, "Definições", tint = currentTheme.text)
                                 }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(24.dp))
-
-                        SelectionContainer {
-                            val annotatedString = buildAnnotatedString {
-                                append(textContent)
-                            }
-                            Text(
-                                text = annotatedString,
-                                fontSize = fontSize.sp,
-                                color = currentTheme.text,
-                                lineHeight = (fontSize * 1.4f).sp
-                            )
-                        }
-                    }
-
-                    // Bottom Bar de Leitura & Controlo de Áudio
-                    Surface(
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        shape = RoundedCornerShape(24.dp),
-                        color = currentTheme.barBg,
-                        shadowElevation = 8.dp
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            IconButton(onClick = { filePicker.launch(arrayOf("application/epub+zip", "application/pdf", "text/plain")) }) {
-                                Icon(Icons.Rounded.FolderOpen, "Abrir Livro", tint = currentTheme.text)
-                            }
-                            IconButton(onClick = {
-                                if (currentChapterIndex > 0) {
-                                    stopAudio()
-                                    currentChapterIndex--
-                                    scope.launch { scrollState.scrollTo(0) }
-                                }
-                            }) {
-                                Icon(Icons.Rounded.SkipPrevious, "Capítulo Anterior", tint = currentTheme.text)
-                            }
-                            FloatingActionButton(
-                                onClick = { togglePlay() },
-                                containerColor = currentTheme.highlightBg,
-                                contentColor = currentTheme.highlightText,
-                                modifier = Modifier.size(52.dp),
-                                shape = CircleShape
-                            ) {
-                                Icon(if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, "Play/Pause")
-                            }
-                            IconButton(onClick = {
-                                if (currentChapterIndex < currentBook.chapters.size - 1) {
-                                    stopAudio()
-                                    currentChapterIndex++
-                                    scope.launch { scrollState.scrollTo(0) }
-                                }
-                            }) {
-                                Icon(Icons.Rounded.SkipNext, "Capítulo Seguinte", tint = currentTheme.text)
-                            }
-                            IconButton(onClick = {
-                                if (currentChapterIndex > 0) currentChapterIndex--
-                            }) {
-                                Icon(Icons.Rounded.Bookmark, "Progresso", tint = currentTheme.text)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-                if (!ttsReady || textContent.isBlank()) return
-                if (isPlaying) {
-                    stopAudio()
-                } else {
-                    nativeRangeWorked = false
-                    tts?.setSpeechRate(speechRate)
-                    val chunk = if (textContent.length > 3800) textContent.substring(0, 3800) else textContent
-                    tts?.speak(chunk, TextToSpeech.QUEUE_FLUSH, Bundle(), "glow_utterance")
-                }
-            }
-
-            fun openDictionaryOrTranslate(query: String) {
-                val encoded = URLEncoder.encode(query.trim(), "UTF-8")
-                val url = when (dictionaryProvider) {
-                    "Priberam / Dicio" -> "https://priberam.org"
-                    "Linguee / DeepL" -> "https://deepl.com"
-                    else -> "https://google.com"
-                }
-                try {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-                } catch (_: Exception) {}
-            }
-
-            val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
-                uri?.let {
-                    stopAudio()
-                    isLoadingBook = true
-                    scope.launch {
-                        currentBook = withContext(Dispatchers.IO) { BookParser.parseBook(context, it) }
-                        currentChapterIndex = 0
-                        scrollState.scrollTo(0)
-                        isLoadingBook = false
-                    }
-                }
-            }
-
-            if (showTypeSheet) {
-                TypographySheet(
-                    theme = currentTheme,
-                    fontSize = fontSize,
-                    onFontSizeChange = { fontSize = it },
-                    currentFont = currentFont,
-                    onFontChange = { currentFont = it },
-                    currentAlign = currentAlign,
-                    onAlignChange = { currentAlign = it },
-                    onDismiss = { showTypeSheet = false }
-                )
-            }
-
-            if (showNotebookSheet) {
-                NotebookSheet(
-                    theme = currentTheme,
-                    currentBookTitle = currentBook.title,
-                    annotations = annotations,
-                    onDeleteAnnotation = { id ->
-                        annotations = annotations.filterNot { it.id == id }
-                        ReaderStorage.saveAnnotations(context, annotations)
-                    },
-                    onJumpToChapter = { idx ->
-                        stopAudio()
-                        currentChapterIndex = idx.coerceIn(0, currentBook.chapters.size - 1)
-                        scope.launch { scrollState.scrollTo(0) }
-                    },
-                    onDismiss = { showNotebookSheet = false }
-                )
-            }
-
-            if (showSettingsSheet) {
-                SettingsSheet(
-                    context = context,
-                    theme = currentTheme,
-                    selectedLocale = selectedLocale,
-                    onLocaleChange = { loc ->
-                        selectedLocale = loc
-                        tts?.language = loc
-                    },
-                    availableVoices = availableVoices,
-                    selectedVoiceName = selectedVoiceName,
-                    onVoiceSelect = { voice ->
-                        selectedVoiceName = voice.name
-                        tts?.voice = voice
-                    },
-                    dictionaryProvider = dictionaryProvider,
-                    onDictionaryChange = { dictionaryProvider = it },
-                    onDismiss = { showSettingsSheet = false }
-                )
-            }
-                        if (showNoteDialog) {
-                AlertDialog(
-                    onDismissRequest = { showNoteDialog = false },
-                    title = { Text("Destacar, Traduzir ou Anotar") },
-                    text = {
-                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            OutlinedTextField(
-                                value = draftSelection,
-                                onValueChange = { draftSelection = it },
-                                label = { Text("Trecho selecionado") },
-                                maxLines = 3
-                            )
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                HighlightColor.values().forEach { c ->
-                                    FilterChip(
-                                        selected = draftColor == c,
-                                        onClick = { draftColor = c },
-                                        label = { Text(c.label, fontSize = 11.sp) }
-                                    )
-                                }
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(checked = draftUnderline, onCheckedChange = { draftUnderline = it })
-                                Text("Sublinhar texto no capítulo")
-                            }
-                            OutlinedTextField(
-                                value = draftNote,
-                                onValueChange = { draftNote = it },
-                                label = { Text("Nota pessoal (opcional)") },
-                                maxLines = 3
-                            )
-                            if (draftSelection.isNotBlank()) {
-                                TextButton(onClick = { openDictionaryOrTranslate(draftSelection) }) {
-                                    Icon(Icons.Rounded.Translate, null)
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Abrir no $dictionaryProvider")
-                                }
-                            }
-                        }
-                    },
-                    confirmButton = {
-                        Button(onClick = {
-                            if (draftSelection.isNotBlank() || draftNote.isNotBlank()) {
-                                val item = StudyAnnotation(
-                                    bookTitle = currentBook.title,
-                                    chapterIndex = currentChapterIndex,
-                                    chapterTitle = activeChapter.title,
-                                    selectedText = draftSelection.trim(),
-                                    note = draftNote.trim(),
-                                    colorName = draftColor.name,
-                                    isUnderline = draftUnderline
-                                )
-                                annotations = listOf(item) + annotations
-                                ReaderStorage.saveAnnotations(context, annotations)
-                            }
-                            showNoteDialog = false
-                        }) { Text("Guardar") }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { showNoteDialog = false }) { Text("Cancelar") }
-                    }
-                )
-            }
-
-            if (showTocSheet) {
-                ModalBottomSheet(onDismissRequest = { showTocSheet = false }, containerColor = currentTheme.barBg) {
-                    Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
-                        Text("Índice — ${currentBook.title}", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = currentTheme.text)
-                        Spacer(modifier = Modifier.height(12.dp))
-                        LazyColumn(modifier = Modifier.heightIn(max = 400.dp)) {
-                            itemsIndexed(currentBook.chapters) { index, chapter ->
-                                val isSelected = index == currentChapterIndex
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(if (isSelected) currentTheme.highlightBg.copy(alpha = 0.4f) else Color.Transparent)
-                                        .clickable {
-                                            stopAudio()
-                                            currentChapterIndex = index
-                                            showTocSheet = false
-                                            scope.launch { scrollState.scrollTo(0) }
-                                        }
-                                        .padding(vertical = 12.dp, horizontal = 12.dp)
-                                ) {
-                                    Text(
-                                        text = chapter.title,
-                                        color = currentTheme.text,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                        fontSize = 15.sp
-                                    )
-                                }
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(24.dp))
-                    }
-                }
-            }
-                        Surface(modifier = Modifier.fillMaxSize(), color = currentTheme.bg) {
-                Box(modifier = Modifier.fillMaxSize()) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 22.dp)
-                            .verticalScroll(scrollState)
-                            .padding(top = 16.dp, bottom = 135.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = currentBook.title,
-                                    fontSize = 17.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    color = currentTheme.text
-                                )
-                                Text(
-                                    text = activeChapter.title,
-                                    fontSize = 12.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    color = currentTheme.text.copy(alpha = 0.65f)
-                                )
-                            }
-                            Row {
-                                IconButton(onClick = { showTocSheet = true }, modifier = Modifier.size(36.dp)) {
-                                    Icon(Icons.Rounded.FormatListBulleted, "Índice", tint = currentTheme.text)
-                                }
-                                IconButton(onClick = {
-                                    val bm = StudyAnnotation(
-                                        bookTitle = currentBook.title,
-                                        chapterIndex = currentChapterIndex,
-                                        chapterTitle = activeChapter.title,
-                                        selectedText = textContent.take(80) + "...",
-                                        isBookmark = true
-                                    )
-                                    annotations = listOf(bm) + annotations
-                                    ReaderStorage.saveAnnotations(context, annotations)
-                                }, modifier = Modifier.size(36.dp)) {
-                                    Icon(Icons.Rounded.BookmarkAdd, "Marcador", tint = currentTheme.text)
-                                }
-                                IconButton(onClick = { showNotebookSheet = true }, modifier = Modifier.size(36.dp)) {
-                                    Icon(Icons.Rounded.Book, "Caderno de Notas", tint = currentTheme.text)
-                                }
-                                IconButton(onClick = { showTypeSheet = true }, modifier = Modifier.size(36.dp)) {
-                                    Icon(Icons.Rounded.FormatSize, "Fontes e Alinhamento", tint = currentTheme.text)
-                                }
-                                IconButton(onClick = {
-                                    currentTheme = when (currentTheme) {
-                                        ReaderTheme.LIGHT -> ReaderTheme.SEPIA
-                                        ReaderTheme.SEPIA -> ReaderTheme.DARK
-                                        ReaderTheme.DARK -> ReaderTheme.LIGHT
-                                    }
-                                }, modifier = Modifier.size(36.dp)) {
-                                    Icon(Icons.Rounded.Palette, "Tema", tint = currentTheme.text)
-                                }
-                                IconButton(onClick = { showSettingsSheet = true }, modifier = Modifier.size(36.dp)) {
-                                    Icon(Icons.Rounded.Settings, "Definições", tint = currentTheme.text)
-                                }
                                 IconButton(onClick = {
                                     filePicker.launch(arrayOf("application/epub+zip", "application/pdf", "text/plain"))
                                 }, modifier = Modifier.size(36.dp)) {
@@ -847,39 +521,40 @@ class MainActivity : ComponentActivity() {
                                 enabled = currentChapterIndex > 0
                             ) {
                                 Icon(Icons.Rounded.SkipPrevious, "Anterior", tint = currentTheme.text)
-}
-IconButton(
-onClick = { togglePlay() },
-modifier = Modifier.size(52.dp).clip(CircleShape).background(Color(0xFF4F46E5))
-) {
-Icon(
-imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-contentDescription = "Play/Pause",
-tint = Color.White,
-modifier = Modifier.size(28.dp)
-)
-}
-IconButton(
-onClick = {
-if (currentChapterIndex < currentBook.chapters.size - 1) {
-stopAudio()
-currentChapterIndex++
-scope.launch { scrollState.scrollTo(0) }
-}
-},
-enabled = currentChapterIndex < currentBook.chapters.size - 1
-) {
-Icon(Icons.Rounded.SkipNext, "Seguinte", tint = currentTheme.text)
-}
-IconButton(onClick = { stopAudio() }) {
-Icon(Icons.Rounded.Stop, "Parar", tint = currentTheme.text)
-}
-}
-}
-}
-}
-}
-}
-}
+                            }
 
+                            IconButton(
+                                onClick = { togglePlay() },
+                                modifier = Modifier.size(52.dp).clip(CircleShape).background(Color(0xFF4F46E5))
+                            ) {
+                                Icon(
+                                    imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                    contentDescription = "Play/Pause",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                            }
 
+                            IconButton(
+                                onClick = {
+                                    if (currentChapterIndex < currentBook.chapters.size - 1) {
+                                        stopAudio()
+                                        currentChapterIndex++
+                                        scope.launch { scrollState.scrollTo(0) }
+                                    }
+                                },
+                                enabled = currentChapterIndex < currentBook.chapters.size - 1
+                            ) {
+                                Icon(Icons.Rounded.SkipNext, "Seguinte", tint = currentTheme.text)
+                            }
+
+                            IconButton(onClick = { stopAudio() }) {
+                                Icon(Icons.Rounded.Stop, "Parar", tint = currentTheme.text)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
