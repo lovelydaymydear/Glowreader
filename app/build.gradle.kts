@@ -11,8 +11,9 @@ android {
         applicationId = "com.glowreader.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "2.0"
+        versionCode = 3
+        versionName = "2.1"
+        multiDexEnabled = true
     }
 
     buildTypes {
@@ -50,4 +51,5 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
+    implementation("androidx.multidex:multidex:2.0.1")
 }
