@@ -5,6 +5,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import android.text.Html
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
+import com.tom_roush.pdfbox.io.MemoryUsageSetting
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.text.PDFTextStripper
 import org.xmlpull.v1.XmlPullParser
@@ -26,12 +27,19 @@ data class ParsedBook(
 object BookParser {
 
     fun parseBook(context: Context, uri: Uri): ParsedBook {
-        val fileName = getFileName(context, uri)
-        val lowerName = fileName.lowercase()
-        return when {
-            lowerName.endsWith(".pdf") -> parsePdf(context, uri, fileName)
-            lowerName.endsWith(".epub") -> parseEpub(context, uri, fileName)
-            else -> parseTxt(context, uri, fileName)
+        return try {
+            val fileName = getFileName(context, uri)
+            val lowerName = fileName.lowercase()
+            when {
+                lowerName.endsWith(".pdf") -> parsePdf(context, uri, fileName)
+                lowerName.endsWith(".epub") -> parseEpub(context, uri, fileName)
+                else -> parseTxt(context, uri, fileName)
+            }
+        } catch (e: Exception) {
+            ParsedBook(
+                title = "Erro ao abrir",
+                chapters = listOf(BookChapter("Aviso", "Não foi possível processar este ficheiro: ${e.message}"))
+            )
         }
     }
 
@@ -43,29 +51,29 @@ object BookParser {
                 name = cursor.getString(nameIndex)
             }
         }
-        return name.substringBeforeLast(".")
+        return name
     }
 
     private fun parseTxt(context: Context, uri: Uri, title: String): ParsedBook {
         val text = context.contentResolver.openInputStream(uri)?.use { stream ->
             BufferedReader(InputStreamReader(stream)).readText()
         } ?: ""
-        return ParsedBook(title, listOf(BookChapter("Texto Completo", text)))
+        return ParsedBook(title.substringBeforeLast("."), listOf(BookChapter("Texto Completo", text)))
     }
 
     private fun parsePdf(context: Context, uri: Uri, title: String): ParsedBook {
         PDFBoxResourceLoader.init(context)
         val chapters = mutableListOf<BookChapter>()
         context.contentResolver.openInputStream(uri)?.use { stream ->
-            PDDocument.load(stream).use { document ->
+            PDDocument.load(stream, MemoryUsageSetting.setupTempFileOnly()).use { document ->
                 val stripper = PDFTextStripper()
-                val totalPages = document.numberOfPages
+                val totalPages = document.numberOfPages.coerceAtMost(300)
                 for (page in 1..totalPages) {
                     stripper.startPage = page
                     stripper.endPage = page
                     val pageText = stripper.getText(document).trim()
                     if (pageText.isNotEmpty()) {
-                        val firstLine = pageText.lines().firstOrNull { it.trim().length in 3..50 }?.trim()
+                        val firstLine = pageText.lines().firstOrNull { it.trim().length in 3..45 }?.trim()
                         val chapterTitle = if (firstLine != null) "Pág. $page - $firstLine" else "Página $page"
                         chapters.add(BookChapter(chapterTitle, pageText))
                     }
@@ -73,9 +81,9 @@ object BookParser {
             }
         }
         if (chapters.isEmpty()) {
-            chapters.add(BookChapter("Página 1", "Não foi possível extrair texto deste PDF."))
+            chapters.add(BookChapter("Página 1", "Este PDF parece ser composto apenas por imagens digitalizadas sem texto selecionável."))
         }
-        return ParsedBook(title, chapters)
+        return ParsedBook(title.substringBeforeLast("."), chapters)
     }
 
     private fun parseEpub(context: Context, uri: Uri, title: String): ParsedBook {
@@ -89,22 +97,24 @@ object BookParser {
                 var entry = zip.nextEntry
                 while (entry != null) {
                     val entryName = entry.name
-                    val bytes = zip.readBytes()
-                    val contentStr = String(bytes, Charsets.UTF_8)
+                    val isTextFile = entryName.endsWith(".opf", true) ||
+                            entryName.endsWith(".ncx", true) ||
+                            entryName.endsWith(".html", true) ||
+                            entryName.endsWith(".xhtml", true) ||
+                            entryName.endsWith(".htm", true)
 
-                    when {
-                        entryName.endsWith(".opf", ignoreCase = true) -> {
-                            parseOpf(contentStr, manifestMap, spineOrder)
-                        }
-                        entryName.endsWith(".ncx", ignoreCase = true) -> {
-                            parseNcx(contentStr, tocTitles)
-                        }
-                        entryName.endsWith(".html", ignoreCase = true) ||
-                        entryName.endsWith(".xhtml", ignoreCase = true) ||
-                        entryName.endsWith(".htm", ignoreCase = true) -> {
-                            val cleanName = entryName.substringAfterLast("/")
-                            val plainText = Html.fromHtml(contentStr, Html.FROM_HTML_MODE_COMPACT).toString().trim()
-                            htmlFiles[cleanName] = plainText
+                    if (!entry.isDirectory && isTextFile) {
+                        val contentStr = zip.bufferedReader(Charsets.UTF_8).readText()
+                        when {
+                            entryName.endsWith(".opf", true) -> parseOpf(contentStr, manifestMap, spineOrder)
+                            entryName.endsWith(".ncx", true) -> parseNcx(contentStr, tocTitles)
+                            else -> {
+                                val cleanName = entryName.substringAfterLast("/")
+                                val plainText = Html.fromHtml(contentStr, Html.FROM_HTML_MODE_COMPACT).toString().trim()
+                                if (plainText.isNotBlank()) {
+                                    htmlFiles[cleanName] = plainText
+                                }
+                            }
                         }
                     }
                     zip.closeEntry()
@@ -127,18 +137,16 @@ object BookParser {
 
         if (chapters.isEmpty()) {
             htmlFiles.entries.forEachIndexed { index, (fileName, text) ->
-                if (text.isNotBlank()) {
-                    val chapterTitle = tocTitles[fileName] ?: "Capítulo ${index + 1}"
-                    chapters.add(BookChapter(chapterTitle, text))
-                }
+                val chapterTitle = tocTitles[fileName] ?: "Capítulo ${index + 1}"
+                chapters.add(BookChapter(chapterTitle, text))
             }
         }
 
         if (chapters.isEmpty()) {
-            chapters.add(BookChapter("Início", "Não foi possível ler o conteúdo deste EPUB."))
+            chapters.add(BookChapter("Início", "Não foi possível extrair capítulos deste EPUB."))
         }
 
-        return ParsedBook(title, chapters)
+        return ParsedBook(title.substringBeforeLast("."), chapters)
     }
 
     private fun parseOpf(xml: String, manifest: MutableMap<String, String>, spine: MutableList<String>) {
