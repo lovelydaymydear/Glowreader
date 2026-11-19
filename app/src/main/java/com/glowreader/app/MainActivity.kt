@@ -4,7 +4,6 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.speech.tts.Voice
 import androidx.activity.ComponentActivity
@@ -2382,7 +2381,7 @@ class MainActivity : ComponentActivity() {
                                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                                         ) {
                                             OutlinedButton(onClick = {
-                                                val intent = Intent(Settings.ACTION_TTS_SETTINGS).apply {
+                                                val intent = Intent("com.android.settings.TTS_SETTINGS").apply {
                                                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                                 }
                                                 runCatching { context.startActivity(intent) }
