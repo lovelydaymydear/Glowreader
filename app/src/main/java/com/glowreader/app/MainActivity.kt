@@ -162,11 +162,14 @@ class MainActivity : ComponentActivity() {
             var voiceLangFilter by remember { mutableStateOf("pt") }
             var availableVoices by remember { mutableStateOf<List<Voice>>(emptyList()) }
             var selectedVoiceName by remember { mutableStateOf("") }
+            var selectedEdgeVoice by remember { mutableStateOf("pt-PT-RaquelNeural") }
+            var edgeVoiceLangFilter by remember { mutableStateOf("all") }
+            var selectedOfflineModelId by remember { mutableStateOf("") }
             var wordHighlightEnabled by remember { mutableStateOf(true) }
-            var customOnlineEndpoint by remember { mutableStateOf(VoiceEngineManager.DEFAULT_ONLINE_TTS_ENDPOINT) }
             var onlineTestResult by remember { mutableStateOf<String?>(null) }
-            var piperModelsCount by remember { mutableIntStateOf(0) }
-            var downloadedModelsCount by remember { mutableIntStateOf(0) }
+            var catalogRefreshTick by remember { mutableIntStateOf(0) }
+            var downloadingItemId by remember { mutableStateOf<String?>(null) }
+            var downloadingPercent by remember { mutableIntStateOf(0) }
             var voiceZipSourceInput by remember { mutableStateOf("") }
             var voiceDownloadStatus by remember { mutableStateOf<String?>(null) }
 
@@ -187,13 +190,8 @@ class MainActivity : ComponentActivity() {
                 categories = LibraryOrganizationManager.loadAllCategories(context)
             }
 
-            fun refreshNeuralCounts() {
-                piperModelsCount = voiceEngine.checkLocalPiperModels().size
-                downloadedModelsCount = voiceEngine.listDownloadedNeuralItems().size
-            }
-
             LaunchedEffect(Unit) {
-                refreshNeuralCounts()
+                catalogRefreshTick++
                 voiceEngine.initializeAndroidTts { voices ->
                     availableVoices = voices
                 }
@@ -210,11 +208,10 @@ class MainActivity : ComponentActivity() {
                 voiceEngine.currentProvider = selectedProvider
                 voiceEngine.selectedLocale = selectedLocale
                 voiceEngine.selectedVoiceName = selectedVoiceName
+                voiceEngine.selectedEdgeVoice = selectedEdgeVoice
+                voiceEngine.selectedOfflineModelId = selectedOfflineModelId
                 voiceEngine.speechRate = speechRate
                 voiceEngine.wordHighlightEnabled = wordHighlightEnabled
-                voiceEngine.customOnlineEndpointUrl = customOnlineEndpoint.ifBlank {
-                    VoiceEngineManager.DEFAULT_ONLINE_TTS_ENDPOINT
-                }
                 voiceEngine.applyVoiceAndParams()
             }
 
@@ -2322,6 +2319,21 @@ class MainActivity : ComponentActivity() {
                                         availableVoices.filter { it.locale.language.equals(voiceLangFilter, ignoreCase = true) }
                                     }
                                 }
+                                val filteredEdgeVoices = remember(edgeVoiceLangFilter) {
+                                    when (edgeVoiceLangFilter) {
+                                        "pt" -> VoiceEngineManager.EDGE_VOICES_CATALOG.filter { it.languageFilter == "pt" }
+                                        "en" -> VoiceEngineManager.EDGE_VOICES_CATALOG.filter { it.languageFilter == "en" }
+                                        "multi" -> VoiceEngineManager.EDGE_VOICES_CATALOG.filter { it.isMultilingual }
+                                        else -> VoiceEngineManager.EDGE_VOICES_CATALOG
+                                    }
+                                }
+                                val downloadedCatalog = remember(catalogRefreshTick) {
+                                    VoiceEngineManager.OFFLINE_VOICE_CATALOG.filter { voiceEngine.isCatalogItemDownloaded(it) }
+                                }
+                                val availableToDownloadCatalog = remember(catalogRefreshTick) {
+                                    VoiceEngineManager.OFFLINE_VOICE_CATALOG.filterNot { voiceEngine.isCatalogItemDownloaded(it) }
+                                }
+
                                 LazyColumn(
                                     modifier = Modifier
                                         .fillMaxSize()
@@ -2446,7 +2458,12 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
                                     item {
-                                        Text("Motor de Voz (TTS / Neural / Online / Hugging Face)", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
+                                        Text("Motor de Voz e Downloads", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
+                                        Text(
+                                            text = voiceEngine.getAvailableStorageGb(),
+                                            fontSize = 12.sp,
+                                            color = currentTheme.text.copy(alpha = 0.7f)
+                                        )
                                         Spacer(modifier = Modifier.height(6.dp))
                                         Row(
                                             modifier = Modifier.horizontalScroll(rememberScrollState()),
@@ -2466,7 +2483,7 @@ class MainActivity : ComponentActivity() {
                                                 }
                                                 runCatching { context.startActivity(intent) }
                                             }) {
-                                                Text("Baixar Vozes Offline", maxLines = 1, softWrap = false)
+                                                Text("Baixar Vozes Sistema", maxLines = 1, softWrap = false)
                                             }
                                         }
                                         Spacer(modifier = Modifier.height(6.dp))
@@ -2501,113 +2518,274 @@ class MainActivity : ComponentActivity() {
                                                 }
                                             )
                                         }
-                                        Text(
-                                            text = "Modelos locais / clones guardados: $downloadedModelsCount (Piper .onnx: $piperModelsCount)",
-                                            fontSize = 12.sp,
-                                            color = currentTheme.text.copy(alpha = 0.75f)
-                                        )
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(
-                                            text = "Baixar modelos diretamente do Hugging Face:",
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Medium,
-                                            color = currentTheme.text
-                                        )
-                                        Row(
-                                            modifier = Modifier.horizontalScroll(rememberScrollState()),
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+
+                                        // Catálogo completo Edge TTS (incluindo Multilingual)
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Card(
+                                            colors = CardDefaults.cardColors(containerColor = currentTheme.barBg),
+                                            modifier = Modifier.fillMaxWidth()
                                         ) {
-                                            VoiceEngineManager.HUGGINGFACE_PRESETS.forEach { preset ->
-                                                OutlinedButton(onClick = {
-                                                    voiceDownloadStatus = "A baixar ${preset.title}..."
-                                                    scope.launch {
-                                                        val mainRes = voiceEngine.downloadFileFromUrl(
-                                                            preset.downloadUrl,
-                                                            preset.targetSubdir,
-                                                            preset.fileName
+                                            Column(
+                                                modifier = Modifier.padding(12.dp),
+                                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                                            ) {
+                                                Text(
+                                                    text = "Vozes Edge TTS (${VoiceEngineManager.EDGE_VOICES_CATALOG.size} vozes + Multilingual)",
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 14.sp,
+                                                    color = currentTheme.text
+                                                )
+                                                Row(
+                                                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    listOf(
+                                                        "all" to "Todas",
+                                                        "multi" to "Multilingual",
+                                                        "pt" to "Português",
+                                                        "en" to "English"
+                                                    ).forEach { (key, label) ->
+                                                        FilterChip(
+                                                            selected = edgeVoiceLangFilter == key,
+                                                            onClick = { edgeVoiceLangFilter = key },
+                                                            label = { Text(label, maxLines = 1, softWrap = false) }
                                                         )
-                                                        if (preset.companionUrl != null && preset.companionFileName != null) {
-                                                            voiceEngine.downloadFileFromUrl(
-                                                                preset.companionUrl,
-                                                                preset.targetSubdir,
-                                                                preset.companionFileName
+                                                    }
+                                                }
+                                                filteredEdgeVoices.forEach { edgeVoice ->
+                                                    Row(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .clickable {
+                                                                selectedProvider = VoiceProviderType.EDGE_ONLINE
+                                                                selectedEdgeVoice = edgeVoice.shortName
+                                                                syncVoiceEngineConfig()
+                                                            }
+                                                            .padding(vertical = 2.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        RadioButton(
+                                                            selected = selectedEdgeVoice == edgeVoice.shortName,
+                                                            onClick = {
+                                                                selectedProvider = VoiceProviderType.EDGE_ONLINE
+                                                                selectedEdgeVoice = edgeVoice.shortName
+                                                                syncVoiceEngineConfig()
+                                                            }
+                                                        )
+                                                        Column(modifier = Modifier.weight(1f)) {
+                                                            Text(edgeVoice.displayName, fontSize = 13.sp, color = currentTheme.text)
+                                                            Text(
+                                                                text = "${edgeVoice.shortName} • ${edgeVoice.gender}",
+                                                                fontSize = 11.sp,
+                                                                color = currentTheme.text.copy(alpha = 0.65f)
                                                             )
                                                         }
-                                                        refreshNeuralCounts()
-                                                        voiceDownloadStatus = if (mainRes.isSuccess) {
-                                                            "Concluído: ${preset.fileName}"
+                                                    }
+                                                }
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                                ) {
+                                                    OutlinedButton(onClick = {
+                                                        scope.launch {
+                                                            val ok = voiceEngine.testOnlineEndpoint()
+                                                            onlineTestResult = if (ok) "Ligação Edge/Online ativa." else "Sem resposta de rede."
+                                                        }
+                                                    }) {
+                                                        Text("Testar Edge", maxLines = 1, softWrap = false)
+                                                    }
+                                                    if (onlineTestResult != null) {
+                                                        Text(onlineTestResult!!, fontSize = 12.sp, color = currentTheme.text)
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // Gestor de Vozes Offline: "No aparelho" e "Para baixar"
+                                        Spacer(modifier = Modifier.height(10.dp))
+                                        Card(
+                                            colors = CardDefaults.cardColors(containerColor = currentTheme.barBg),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Column(
+                                                modifier = Modifier.padding(12.dp),
+                                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                                            ) {
+                                                Text(
+                                                    text = "Vozes Offline (No aparelho / Para baixar)",
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 15.sp,
+                                                    color = currentTheme.text
+                                                )
+
+                                                Text(
+                                                    text = "No aparelho (${downloadedCatalog.size})",
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    fontSize = 13.sp,
+                                                    color = Color(0xFF4F46E5)
+                                                )
+                                                if (downloadedCatalog.isEmpty()) {
+                                                    Text(
+                                                        text = "Nenhuma voz descarregada ainda. Toca em \"Baixar\" abaixo.",
+                                                        fontSize = 12.sp,
+                                                        color = currentTheme.text.copy(alpha = 0.7f)
+                                                    )
+                                                } else {
+                                                    downloadedCatalog.forEach { item ->
+                                                        Row(
+                                                            modifier = Modifier
+                                                                .fillMaxWidth()
+                                                                .clickable {
+                                                                    selectedOfflineModelId = item.id
+                                                                    selectedProvider = VoiceProviderType.PIPER_LOCAL
+                                                                    syncVoiceEngineConfig()
+                                                                }
+                                                                .padding(vertical = 4.dp),
+                                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                                            verticalAlignment = Alignment.CenterVertically
+                                                        ) {
+                                                            Row(
+                                                                verticalAlignment = Alignment.CenterVertically,
+                                                                modifier = Modifier.weight(1f)
+                                                            ) {
+                                                                RadioButton(
+                                                                    selected = selectedOfflineModelId == item.id,
+                                                                    onClick = {
+                                                                        selectedOfflineModelId = item.id
+                                                                        selectedProvider = VoiceProviderType.PIPER_LOCAL
+                                                                        syncVoiceEngineConfig()
+                                                                    }
+                                                                )
+                                                                Column {
+                                                                    Text(item.title, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = currentTheme.text)
+                                                                    Text(
+                                                                        text = "${item.subtitle} • ${voiceEngine.getCatalogItemSizeLabel(item)}",
+                                                                        fontSize = 11.sp,
+                                                                        color = currentTheme.text.copy(alpha = 0.7f)
+                                                                    )
+                                                                }
+                                                            }
+                                                            IconButton(onClick = {
+                                                                voiceEngine.deleteCatalogItem(item)
+                                                                catalogRefreshTick++
+                                                            }) {
+                                                                Icon(Icons.Rounded.DeleteOutline, contentDescription = "Apagar voz", tint = currentTheme.text)
+                                                            }
+                                                        }
+                                                    }
+                                                }
+
+                                                HorizontalDivider()
+
+                                                Text(
+                                                    text = "Para baixar (${availableToDownloadCatalog.size})",
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    fontSize = 13.sp,
+                                                    color = Color(0xFF4F46E5)
+                                                )
+                                                availableToDownloadCatalog.forEach { item ->
+                                                    val isThisDownloading = downloadingItemId == item.id
+                                                    Row(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .padding(vertical = 4.dp),
+                                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Column(modifier = Modifier.weight(1f)) {
+                                                            Text(item.title, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = currentTheme.text)
+                                                            Text(
+                                                                text = if (isThisDownloading) {
+                                                                    "A baixar... $downloadingPercent%"
+                                                                } else {
+                                                                    "${item.subtitle}\nNão baixado • ${item.approxSizeLabel}"
+                                                                },
+                                                                fontSize = 11.sp,
+                                                                color = currentTheme.text.copy(alpha = 0.72f)
+                                                            )
+                                                        }
+                                                        Button(
+                                                            onClick = {
+                                                                downloadingItemId = item.id
+                                                                downloadingPercent = 1
+                                                                voiceDownloadStatus = null
+                                                                scope.launch {
+                                                                    val mainRes = voiceEngine.downloadFileFromUrl(
+                                                                        urlStr = item.downloadUrl,
+                                                                        targetSubdir = item.targetSubdir,
+                                                                        outputFileName = item.fileName,
+                                                                        onProgressPercent = { pct -> downloadingPercent = pct }
+                                                                    )
+                                                                    if (mainRes.isSuccess && item.companionUrl != null && item.companionFileName != null) {
+                                                                        voiceEngine.downloadFileFromUrl(
+                                                                            urlStr = item.companionUrl,
+                                                                            targetSubdir = item.targetSubdir,
+                                                                            outputFileName = item.companionFileName
+                                                                        )
+                                                                    }
+                                                                    downloadingItemId = null
+                                                                    catalogRefreshTick++
+                                                                    if (mainRes.isSuccess) {
+                                                                        selectedOfflineModelId = item.id
+                                                                        voiceDownloadStatus = "Voz ${item.title} instalada no aparelho!"
+                                                                    } else {
+                                                                        voiceDownloadStatus = "Falha ao baixar ${item.title}: ${mainRes.exceptionOrNull()?.message}"
+                                                                    }
+                                                                }
+                                                            },
+                                                            enabled = downloadingItemId == null,
+                                                            shape = RoundedCornerShape(20.dp)
+                                                        ) {
+                                                            Text(
+                                                                text = if (isThisDownloading) "$downloadingPercent%" else "Baixar",
+                                                                maxLines = 1,
+                                                                softWrap = false
+                                                            )
+                                                        }
+                                                    }
+                                                }
+
+                                                HorizontalDivider()
+                                                Text(
+                                                    text = "Clonador de Voz (.zip)",
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    fontSize = 13.sp,
+                                                    color = currentTheme.text
+                                                )
+                                                OutlinedTextField(
+                                                    value = voiceZipSourceInput,
+                                                    onValueChange = { voiceZipSourceInput = it },
+                                                    label = { Text("URL ou caminho local do .zip") },
+                                                    singleLine = true,
+                                                    modifier = Modifier.fillMaxWidth()
+                                                )
+                                                OutlinedButton(onClick = {
+                                                    voiceDownloadStatus = "A baixar e extrair .zip..."
+                                                    scope.launch {
+                                                        val res = voiceEngine.downloadAndExtractVoiceZip(
+                                                            zipUrlOrLocalPath = voiceZipSourceInput,
+                                                            voiceName = "clone_${System.currentTimeMillis()}"
+                                                        )
+                                                        catalogRefreshTick++
+                                                        voiceDownloadStatus = if (res.isSuccess) {
+                                                            "Pacote .zip extraído (${voiceEngine.activeClonedVoiceName})"
                                                         } else {
-                                                            "Erro: ${mainRes.exceptionOrNull()?.message}"
+                                                            "Erro .zip: ${res.exceptionOrNull()?.message}"
                                                         }
                                                     }
                                                 }) {
-                                                    Text(preset.category, maxLines = 1, softWrap = false)
+                                                    Text("Baixar / Extrair .ZIP", maxLines = 1, softWrap = false)
+                                                }
+                                                if (voiceDownloadStatus != null) {
+                                                    Text(voiceDownloadStatus!!, fontSize = 12.sp, color = Color(0xFF4F46E5))
                                                 }
                                             }
                                         }
-                                        Spacer(modifier = Modifier.height(6.dp))
-                                        OutlinedTextField(
-                                            value = voiceZipSourceInput,
-                                            onValueChange = { voiceZipSourceInput = it },
-                                            label = { Text("URL ou caminho local do .zip (Clonador / Voz)") },
-                                            singleLine = true,
-                                            modifier = Modifier.fillMaxWidth()
-                                        )
-                                        OutlinedButton(onClick = {
-                                            voiceDownloadStatus = "A baixar e extrair .zip..."
-                                            scope.launch {
-                                                val res = voiceEngine.downloadAndExtractVoiceZip(
-                                                    zipUrlOrLocalPath = voiceZipSourceInput,
-                                                    voiceName = "clone_${System.currentTimeMillis()}"
-                                                )
-                                                refreshNeuralCounts()
-                                                voiceDownloadStatus = if (res.isSuccess) {
-                                                    "Pacote .zip extraído (${voiceEngine.activeClonedVoiceName})"
-                                                } else {
-                                                    "Erro .zip: ${res.exceptionOrNull()?.message}"
-                                                }
-                                            }
-                                        }) {
-                                            Text("Baixar / Extrair .ZIP Clonador", maxLines = 1, softWrap = false)
-                                        }
-                                        if (voiceDownloadStatus != null) {
-                                            Text(voiceDownloadStatus!!, fontSize = 12.sp, color = Color(0xFF4F46E5))
-                                        }
-                                        Spacer(modifier = Modifier.height(6.dp))
-                                        OutlinedTextField(
-                                            value = customOnlineEndpoint,
-                                            onValueChange = {
-                                                customOnlineEndpoint = it
-                                                syncVoiceEngineConfig()
-                                            },
-                                            label = { Text("URL do serviço de voz online / Edge (pré-definido)") },
-                                            singleLine = true,
-                                            modifier = Modifier.fillMaxWidth()
-                                        )
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                        ) {
-                                            OutlinedButton(onClick = {
-                                                scope.launch {
-                                                    val ok = voiceEngine.testOnlineEndpoint(customOnlineEndpoint)
-                                                    onlineTestResult = if (ok) {
-                                                        "Ligação ativa (${voiceEngine.customOnlineEndpointUrl.take(36)}...)"
-                                                    } else {
-                                                        "Sem resposta ou sem rede."
-                                                    }
-                                                }
-                                            }) {
-                                                Text("Testar ligação", maxLines = 1, softWrap = false)
-                                            }
-                                            if (onlineTestResult != null) {
-                                                Text(onlineTestResult!!, fontSize = 12.sp, color = currentTheme.text)
-                                            }
-                                        }
+
                                         if (availableVoices.isNotEmpty()) {
                                             Spacer(modifier = Modifier.height(8.dp))
                                             Text(
-                                                text = "Filtrar vozes (${filteredVoices.size} de ${availableVoices.size}):",
+                                                text = "Vozes do Sistema Android (${filteredVoices.size} de ${availableVoices.size}):",
                                                 fontSize = 12.sp,
                                                 fontWeight = FontWeight.Medium,
                                                 color = currentTheme.text
