@@ -56,10 +56,16 @@ enum class VoiceProviderType(
         subtitle = "Modelos locais leves e rápidos guardados no armazenamento da app.",
         requiresNetworkOrModel = true
     ),
-    KOKORO_POCKET_NEURAL(
-        id = "kokoro_pocket_tts",
-        title = "Pocket TTS / Kokoro & Clonador (.zip)",
-        subtitle = "Vozes expressivas descarregadas e pacotes de clonagem (.zip).",
+    KOKORO_LOCAL(
+        id = "kokoro_tts",
+        title = "Kokoro TTS (Modelo Neural Compacto)",
+        subtitle = "Modelos dedicados Kokoro guardados na pasta kokoro_models.",
+        requiresNetworkOrModel = true
+    ),
+    POCKET_TTS_LOCAL(
+        id = "pocket_tts",
+        title = "Pocket TTS & Clonador (.zip)",
+        subtitle = "Motor Pocket TTS independente e pacotes de clonagem de voz (.zip).",
         requiresNetworkOrModel = true
     )
 }
@@ -180,15 +186,28 @@ class VoiceEngineManager(private val context: Context) {
                 companionFileName = "paradee_pt_BR.onnx.json"
             ),
             DownloadableVoiceCatalogItem(
-                id = "pocket_tts_pt",
-                title = "Português do Brasil (Pocket TTS)",
-                subtitle = "Pocket TTS · expressiva, permite clonar",
-                languageTag = "pt",
+                id = "kokoro_82m_quant",
+                title = "Kokoro-82M (Motor Kokoro)",
+                subtitle = "Kokoro TTS · síntese neural compacta",
+                languageTag = "multi",
                 approxSizeLabel = "~88 MB",
-                engineLabel = "Pocket TTS",
+                engineLabel = "Kokoro TTS",
                 downloadUrl = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/onnx/model_q8f16.onnx",
+                targetSubdir = "kokoro_models",
+                fileName = "kokoro_82m_q8f16.onnx",
+                companionUrl = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/config.json",
+                companionFileName = "kokoro_config.json"
+            ),
+            DownloadableVoiceCatalogItem(
+                id = "pocket_tts_profile",
+                title = "Pocket TTS · Perfil Local",
+                subtitle = "Pocket TTS · motor próprio (usa .zip para clonar)",
+                languageTag = "pt",
+                approxSizeLabel = "Config",
+                engineLabel = "Pocket TTS",
+                downloadUrl = "https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/jeff/medium/pt_BR-jeff-medium.onnx.json",
                 targetSubdir = "pocket_tts_models",
-                fileName = "pocket_tts_pt_BR.onnx"
+                fileName = "pocket_tts_profile.json"
             ),
             DownloadableVoiceCatalogItem(
                 id = "cadu_pt_br",
@@ -362,7 +381,7 @@ class VoiceEngineManager(private val context: Context) {
 
     fun isCatalogItemDownloaded(item: DownloadableVoiceCatalogItem): Boolean {
         val file = File(File(context.filesDir, item.targetSubdir), item.fileName)
-        return file.exists() && file.length() > 1024L
+        return file.exists() && file.length() > 16L
     }
 
     fun getCatalogItemSizeLabel(item: DownloadableVoiceCatalogItem): String {
@@ -372,7 +391,8 @@ class VoiceEngineManager(private val context: Context) {
         return if (mb >= 1.0) {
             String.format(Locale.US, "%.0f MB", mb)
         } else {
-            String.format(Locale.US, "%.1f MB", mb)
+            val kb = (file.length().toDouble() / 1024.0).coerceAtLeast(1.0)
+            String.format(Locale.US, "%.0f KB", kb)
         }
     }
 
@@ -1028,7 +1048,7 @@ class VoiceEngineManager(private val context: Context) {
                         output.flush()
                     }
                 }
-                if (partFile.exists() && partFile.length() > 1024L) {
+                if (partFile.exists() && partFile.length() > 16L) {
                     if (outFile.exists()) outFile.delete()
                     partFile.renameTo(outFile)
                     withContext(Dispatchers.Main) { onProgressPercent(100) }
