@@ -3,8 +3,6 @@ package com.glowreader.app
 import android.app.Activity
 import android.net.Uri
 import android.os.Bundle
-import android.speech.tts.TextToSpeech
-import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -59,7 +57,6 @@ enum class ReaderTheme(
 }
 
 class MainActivity : ComponentActivity() {
-    private var tts: TextToSpeech? = null
 
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -70,6 +67,8 @@ class MainActivity : ComponentActivity() {
             val activity = context as? Activity
             val clipboard = LocalClipboardManager.current
             val scope = rememberCoroutineScope()
+
+            val voiceEngine = remember(context) { VoiceEngineManager(context) }
 
             // 0 = Início, 1 = Biblioteca, 2 = Caderno, 3 = Definições
             var currentTab by remember { mutableIntStateOf(0) }
@@ -96,77 +95,72 @@ class MainActivity : ComponentActivity() {
             var webImportStatus by remember { mutableStateOf<String?>(null) }
 
             var annotations by remember { mutableStateOf(ReaderStorage.loadAnnotations(context)) }
-            var selectedLocale by remember { mutableStateOf(Locale("pt", "PT")) }
-            var availableVoices by remember { mutableStateOf<List<Voice>>(emptyList()) }
-            var selectedVoiceName by remember { mutableStateOf("") }
             var dictionaryProvider by remember { mutableStateOf("Google Tradutor") }
 
             var internalLookupTitle by remember { mutableStateOf<String?>(null) }
             var internalLookupUrl by remember { mutableStateOf<String?>(null) }
 
+            // Estados do motor de voz, destaque por palavra e áudio sincronizado
+            var selectedProvider by remember { mutableStateOf(VoiceProviderType.ANDROID_SYSTEM) }
+            var selectedLocale by remember { mutableStateOf(Locale("pt", "PT")) }
+            var availableVoices by remember { mutableStateOf<List<Voice>>(emptyList()) }
+            var selectedVoiceName by remember { mutableStateOf("") }
+            var wordHighlightEnabled by remember { mutableStateOf(true) }
+            var customOnlineEndpoint by remember { mutableStateOf("") }
+            var onlineTestResult by remember { mutableStateOf<String?>(null) }
+            var piperModelsCount by remember { mutableIntStateOf(0) }
+
             var isPlaying by remember { mutableStateOf(false) }
             var speechRate by remember { mutableFloatStateOf(1.0f) }
-            var ttsReady by remember { mutableStateOf(false) }
             var activeSentenceRange by remember { mutableStateOf<IntRange?>(null) }
-            var sentenceQueue by remember { mutableStateOf<List<Pair<IntRange, String>>>(emptyList()) }
-            var currentSentenceIdx by remember { mutableIntStateOf(0) }
+            var activeWordRange by remember { mutableStateOf<IntRange?>(null) }
 
-            fun speakNextSentence(index: Int, queue: List<Pair<IntRange, String>>) {
-                if (index >= queue.size) {
-                    isPlaying = false
-                    activeSentenceRange = null
-                    return
+            var savedAudioTracks by remember { mutableStateOf(voiceEngine.listSavedAudioTracks()) }
+            var audioStatusMessage by remember { mutableStateOf<String?>(null) }
+            var isExportingAudio by remember { mutableStateOf(false) }
+            var showSavedAudioSheet by remember { mutableStateOf(false) }
+
+            LaunchedEffect(Unit) {
+                piperModelsCount = voiceEngine.checkLocalPiperModels().size
+                voiceEngine.initializeAndroidTts { voices ->
+                    availableVoices = voices
                 }
-                currentSentenceIdx = index
-                val (range, sentenceText) = queue[index]
-                activeSentenceRange = range
-                tts?.setSpeechRate(speechRate)
-                tts?.speak(sentenceText, TextToSpeech.QUEUE_FLUSH, Bundle(), "sent_$index")
             }
 
-            DisposableEffect(Unit) {
-                val engine = TextToSpeech(context) { status ->
-                    if (status == TextToSpeech.SUCCESS) {
-                        tts?.language = selectedLocale
-                        availableVoices = tts?.voices?.toList()?.sortedBy { it.locale.displayLanguage } ?: emptyList()
-                        ttsReady = true
-                    }
-                }
-                engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                    override fun onStart(utteranceId: String?) { isPlaying = true }
-                    override fun onDone(utteranceId: String?) {
-                        if (isPlaying) {
-                            speakNextSentence(currentSentenceIdx + 1, sentenceQueue)
-                        }
-                    }
-                    @Deprecated("Deprecated in Java")
-                    override fun onError(utteranceId: String?) { isPlaying = false }
-                })
-                tts = engine
+            DisposableEffect(voiceEngine) {
                 onDispose {
                     ReaderLayoutController.applyFullscreenSystemBars(activity, false)
-                    engine.stop()
-                    engine.shutdown()
+                    voiceEngine.release()
                 }
+            }
+
+            fun syncVoiceEngineConfig() {
+                voiceEngine.currentProvider = selectedProvider
+                voiceEngine.selectedLocale = selectedLocale
+                voiceEngine.selectedVoiceName = selectedVoiceName
+                voiceEngine.speechRate = speechRate
+                voiceEngine.wordHighlightEnabled = wordHighlightEnabled
+                voiceEngine.customOnlineEndpointUrl = customOnlineEndpoint
+                voiceEngine.applyVoiceAndParams()
             }
 
             fun stopAudio() {
+                voiceEngine.stopPlayback()
                 isPlaying = false
-                tts?.stop()
                 activeSentenceRange = null
+                activeWordRange = null
             }
 
-            fun startAudio(text: String) {
-                if (!ttsReady || text.isBlank()) return
-                val regex = Regex("[^.!?\\n]+[.!?\\n]*")
-                val list = regex.findAll(text)
-                    .map { it.range to it.value.trim() }
-                    .filter { it.second.isNotEmpty() }
-                    .toList()
-                if (list.isEmpty()) return
-                sentenceQueue = list
-                isPlaying = true
-                speakNextSentence(0, list)
+            fun startAudio(text: String, onFinished: () -> Unit = {}) {
+                if (text.isBlank()) return
+                syncVoiceEngineConfig()
+                voiceEngine.startReadingText(
+                    text = text,
+                    onSentenceRange = { range -> activeSentenceRange = range },
+                    onWordRange = { wRange -> activeWordRange = wRange },
+                    onPlaybackState = { playing -> isPlaying = playing },
+                    onChapterFinished = onFinished
+                )
             }
 
             fun openDictionaryOrTranslate(query: String) {
@@ -373,15 +367,16 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                LaunchedEffect(activeSentenceRange) {
-                    val range = activeSentenceRange
-                    if (range != null && textContent.isNotEmpty()) {
+                val highlightAnchor = activeWordRange?.first ?: activeSentenceRange?.first
+                LaunchedEffect(highlightAnchor) {
+                    val pos = highlightAnchor
+                    if (pos != null && textContent.isNotEmpty()) {
                         if (readingViewMode == ReadingViewMode.SCROLL && scrollState.maxValue > 0) {
-                            val ratio = range.first.toFloat() / textContent.length.toFloat()
+                            val ratio = pos.toFloat() / textContent.length.toFloat()
                             val targetScroll = (ratio * scrollState.maxValue).toInt()
                             scrollState.animateScrollTo(targetScroll)
                         } else if (readingViewMode == ReadingViewMode.PAGED && pages.size > 1) {
-                            val pageIdx = ((range.first.toFloat() / textContent.length.toFloat()) * pages.size)
+                            val pageIdx = ((pos.toFloat() / textContent.length.toFloat()) * pages.size)
                                 .toInt()
                                 .coerceIn(0, pages.lastIndex)
                             currentPageIndex = pageIdx
@@ -399,6 +394,121 @@ class MainActivity : ComponentActivity() {
                             lastClipboardText = clipNow
                             draftSelection = clipNow
                             showStudyBanner = true
+                        }
+                    }
+                }
+
+                if (showSavedAudioSheet) {
+                    ModalBottomSheet(
+                        onDismissRequest = { showSavedAudioSheet = false },
+                        containerColor = currentTheme.barBg
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 20.dp, vertical = 10.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(
+                                text = "Áudios Guardados com Sincronização",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 18.sp,
+                                color = currentTheme.text
+                            )
+                            Text(
+                                text = "Reproduz o áudio guardado enquanto o leitor acompanha e destaca o texto.",
+                                fontSize = 12.sp,
+                                color = currentTheme.text.copy(alpha = 0.75f)
+                            )
+                            Button(
+                                onClick = {
+                                    isExportingAudio = true
+                                    audioStatusMessage = "A gerar áudio sincronizado..."
+                                    scope.launch {
+                                        syncVoiceEngineConfig()
+                                        val res = voiceEngine.synthesizeAndSaveChapterAudio(
+                                            bookTitle = currentBook.title,
+                                            chapterIndex = currentChapterIndex,
+                                            chapterTitle = activeChapter.title,
+                                            text = textContent
+                                        )
+                                        isExportingAudio = false
+                                        if (res.isSuccess) {
+                                            savedAudioTracks = voiceEngine.listSavedAudioTracks()
+                                            audioStatusMessage = "Áudio e sincronização guardados com sucesso!"
+                                        } else {
+                                            audioStatusMessage = res.exceptionOrNull()?.message ?: "Falha ao guardar áudio."
+                                        }
+                                    }
+                                },
+                                enabled = !isExportingAudio
+                            ) {
+                                Icon(Icons.Rounded.AudioFile, contentDescription = null)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(if (isExportingAudio) "A exportar..." else "Guardar áudio deste capítulo")
+                            }
+
+                            if (audioStatusMessage != null) {
+                                Text(
+                                    text = audioStatusMessage!!,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = Color(0xFF4F46E5)
+                                )
+                            }
+
+                            if (savedAudioTracks.isEmpty()) {
+                                Text(
+                                    text = "Ainda não tens áudios guardados.",
+                                    fontSize = 13.sp,
+                                    color = currentTheme.text.copy(alpha = 0.7f),
+                                    modifier = Modifier.padding(vertical = 12.dp)
+                                )
+                            } else {
+                                LazyColumn(
+                                    modifier = Modifier.heightIn(max = 320.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    items(savedAudioTracks, key = { it.id }) { track ->
+                                        Card(
+                                            colors = CardDefaults.cardColors(containerColor = currentTheme.bg),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(12.dp),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(track.chapterTitle, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = currentTheme.text)
+                                                    Text(
+                                                        text = "${track.bookTitle} • ${track.segments.size} trechos sincronizados",
+                                                        fontSize = 11.sp,
+                                                        color = currentTheme.text.copy(alpha = 0.7f)
+                                                    )
+                                                }
+                                                IconButton(onClick = {
+                                                    if (track.chapterIndex in currentBook.chapters.indices) {
+                                                        currentChapterIndex = track.chapterIndex
+                                                    }
+                                                    showSavedAudioSheet = false
+                                                    voiceEngine.playSavedTrackWithSync(
+                                                        track = track,
+                                                        onSentenceRange = { activeSentenceRange = it },
+                                                        onWordRange = { activeWordRange = it },
+                                                        onPlaybackState = { isPlaying = it }
+                                                    )
+                                                }) {
+                                                    Icon(Icons.Rounded.PlayArrow, contentDescription = "Ouvir sincronizado", tint = Color(0xFF4F46E5))
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(20.dp))
                         }
                     }
                 }
@@ -620,6 +730,16 @@ class MainActivity : ComponentActivity() {
                                     }
                                     Row {
                                         IconButton(
+                                            onClick = { showSavedAudioSheet = true },
+                                            modifier = Modifier.size(36.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.AudioFile,
+                                                contentDescription = "Áudio sincronizado",
+                                                tint = currentTheme.text
+                                            )
+                                        }
+                                        IconButton(
                                             onClick = {
                                                 readingViewMode = if (readingViewMode == ReadingViewMode.SCROLL) {
                                                     ReadingViewMode.PAGED
@@ -704,13 +824,28 @@ class MainActivity : ComponentActivity() {
                                         if (range.first >= 0 && range.last < displayedText.length) {
                                             addStyle(
                                                 SpanStyle(
-                                                    background = currentTheme.highlightBg,
-                                                    color = currentTheme.highlightText,
-                                                    fontWeight = FontWeight.Bold
+                                                    background = currentTheme.highlightBg.copy(alpha = 0.65f),
+                                                    color = currentTheme.highlightText
                                                 ),
                                                 range.first,
                                                 range.last + 1
                                             )
+                                        }
+                                    }
+                                    if (wordHighlightEnabled) {
+                                        activeWordRange?.let { wRange ->
+                                            if (wRange.first >= 0 && wRange.last < displayedText.length) {
+                                                addStyle(
+                                                    SpanStyle(
+                                                        background = Color(0xFFFFB703),
+                                                        color = Color(0xFF000000),
+                                                        fontWeight = FontWeight.Bold,
+                                                        textDecoration = TextDecoration.Underline
+                                                    ),
+                                                    wRange.first,
+                                                    wRange.last + 1
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -1159,6 +1294,95 @@ class MainActivity : ComponentActivity() {
                                                     onClick = { barsBehaviorMode = barOption }
                                                 )
                                                 Text(barOption.label, color = currentTheme.text)
+                                            }
+                                        }
+                                    }
+                                    item {
+                                        Text("Motor de Voz (TTS / Neural / Online)", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
+                                        VoiceProviderType.entries.forEach { providerType ->
+                                            Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    RadioButton(
+                                                        selected = selectedProvider == providerType,
+                                                        onClick = {
+                                                            selectedProvider = providerType
+                                                            syncVoiceEngineConfig()
+                                                        }
+                                                    )
+                                                    Column {
+                                                        Text(providerType.title, color = currentTheme.text, fontWeight = FontWeight.Medium)
+                                                        Text(providerType.subtitle, fontSize = 11.sp, color = currentTheme.text.copy(alpha = 0.7f))
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text("Destaque palavra a palavra ao ler", color = currentTheme.text)
+                                            Switch(
+                                                checked = wordHighlightEnabled,
+                                                onCheckedChange = {
+                                                    wordHighlightEnabled = it
+                                                    syncVoiceEngineConfig()
+                                                }
+                                            )
+                                        }
+                                        Text(
+                                            text = "Modelos Piper (.onnx) locais encontrados: $piperModelsCount",
+                                            fontSize = 12.sp,
+                                            color = currentTheme.text.copy(alpha = 0.75f)
+                                        )
+                                        if (selectedProvider == VoiceProviderType.EDGE_ONLINE || selectedProvider == VoiceProviderType.KOKORO_POCKET_NEURAL) {
+                                            Spacer(modifier = Modifier.height(6.dp))
+                                            OutlinedTextField(
+                                                value = customOnlineEndpoint,
+                                                onValueChange = {
+                                                    customOnlineEndpoint = it
+                                                    syncVoiceEngineConfig()
+                                                },
+                                                label = { Text("URL do serviço de voz online / Edge") },
+                                                singleLine = true,
+                                                modifier = Modifier.fillMaxWidth()
+                                            )
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                            ) {
+                                                OutlinedButton(onClick = {
+                                                    scope.launch {
+                                                        val ok = voiceEngine.testOnlineEndpoint(customOnlineEndpoint)
+                                                        onlineTestResult = if (ok) "Ligação ao serviço de voz ativa." else "Sem resposta ou URL inválida."
+                                                    }
+                                                }) {
+                                                    Text("Testar ligação")
+                                                }
+                                                if (onlineTestResult != null) {
+                                                    Text(onlineTestResult!!, fontSize = 12.sp, color = currentTheme.text)
+                                                }
+                                            }
+                                        }
+                                        if (availableVoices.isNotEmpty()) {
+                                            Spacer(modifier = Modifier.height(6.dp))
+                                            Text("Vozes disponíveis no sistema (${availableVoices.size}):", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = currentTheme.text)
+                                            availableVoices.take(8).forEach { v ->
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    RadioButton(
+                                                        selected = selectedVoiceName == v.name,
+                                                        onClick = {
+                                                            selectedVoiceName = v.name
+                                                            selectedLocale = v.locale
+                                                            syncVoiceEngineConfig()
+                                                        }
+                                                    )
+                                                    Text(
+                                                        text = "${v.locale.displayLanguage} (${v.name.take(24)})",
+                                                        fontSize = 12.sp,
+                                                        color = currentTheme.text
+                                                    )
+                                                }
                                             }
                                         }
                                     }
