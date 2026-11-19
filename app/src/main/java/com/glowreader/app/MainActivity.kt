@@ -1,6 +1,5 @@
 package com.glowreader.app
 
-import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
@@ -671,7 +670,7 @@ class MainActivity : ComponentActivity() {
                     HomeRecentBook(
                         id = meta.id,
                         title = meta.title,
-                        author = meta.author,
+                        author = meta.format,
                         chapterTitle = chTitle,
                         progressPercent = prog,
                         format = meta.format
@@ -788,7 +787,7 @@ class MainActivity : ComponentActivity() {
                                                     ) {
                                                         Column(modifier = Modifier.weight(1f)) {
                                                             Text(book.title, fontWeight = FontWeight.Bold, color = currentTheme.text)
-                                                            Text("${book.author} • ${book.format}", fontSize = 12.sp, color = currentTheme.text.copy(alpha = 0.7f))
+                                                            Text("Formato: ${book.format}", fontSize = 12.sp, color = currentTheme.text.copy(alpha = 0.7f))
                                                         }
                                                         IconButton(onClick = {
                                                             LibraryManager.deleteBook(context, book.id)
