@@ -1,8 +1,11 @@
 package com.glowreader.app
 
 import android.app.Activity
+import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
+import android.speech.tts.TextToSpeech
 import android.speech.tts.Voice
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -152,6 +155,7 @@ class MainActivity : ComponentActivity() {
 
             var selectedProvider by remember { mutableStateOf(VoiceProviderType.ANDROID_SYSTEM) }
             var selectedLocale by remember { mutableStateOf(Locale("pt", "PT")) }
+            var voiceLangFilter by remember { mutableStateOf("pt") }
             var availableVoices by remember { mutableStateOf<List<Voice>>(emptyList()) }
             var selectedVoiceName by remember { mutableStateOf("") }
             var wordHighlightEnabled by remember { mutableStateOf(true) }
@@ -921,7 +925,7 @@ class MainActivity : ComponentActivity() {
                     val pos = highlightAnchor
                     if (pos != null && textContent.isNotEmpty()) {
                         if (readingViewMode == ReadingViewMode.SCROLL && scrollState.maxValue > 0) {
-                            val ratio = pos.toFloat() / textContent.length.toFloat()
+                            val ratio = (pos.toFloat() / textContent.length.toFloat()).coerceIn(0f, 1f)
                             val targetScroll = (ratio * scrollState.maxValue).toInt()
                             scrollState.animateScrollTo(targetScroll)
                         } else if (readingViewMode == ReadingViewMode.PAGED && pages.size > 1) {
@@ -937,7 +941,7 @@ class MainActivity : ComponentActivity() {
                 var showStudyBanner by remember { mutableStateOf(false) }
                 LaunchedEffect(Unit) {
                     while (true) {
-                        kotlinx.coroutines.delay(900)
+                        kotlinx.coroutines.delay(700)
                         val clipNow = clipboard.getText()?.text ?: ""
                         if (clipNow.isNotBlank() && clipNow != lastClipboardText) {
                             lastClipboardText = clipNow
@@ -1264,6 +1268,17 @@ class MainActivity : ComponentActivity() {
                                     modifier = Modifier.horizontalScroll(rememberScrollState()),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
+                                    if (draftSelection.isNotBlank()) {
+                                        OutlinedButton(onClick = {
+                                            showNoteDialog = false
+                                            showStudyBanner = false
+                                            startAudio(draftSelection)
+                                        }) {
+                                            Icon(Icons.Rounded.VolumeUp, contentDescription = null)
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Ouvir", maxLines = 1, softWrap = false)
+                                        }
+                                    }
                                     OutlinedButton(onClick = { openDictionaryOrTranslate(draftSelection) }) {
                                         Icon(Icons.Rounded.Translate, contentDescription = null)
                                         Spacer(modifier = Modifier.width(4.dp))
@@ -1419,7 +1434,7 @@ class MainActivity : ComponentActivity() {
                                     }
                                     Row(
                                         modifier = Modifier
-                                            .widthIn(max = 210.dp)
+                                            .widthIn(max = 220.dp)
                                             .horizontalScroll(rememberScrollState())
                                     ) {
                                         IconButton(
@@ -1673,6 +1688,15 @@ class MainActivity : ComponentActivity() {
                                                     showStudyBanner = false
                                                 }
                                         )
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            showStudyBanner = false
+                                            startAudio(draftSelection)
+                                        },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(Icons.Rounded.VolumeUp, contentDescription = "Ouvir trecho", tint = Color.White)
                                     }
                                     IconButton(onClick = { showNoteDialog = true }, modifier = Modifier.size(32.dp)) {
                                         Icon(Icons.Rounded.EditNote, contentDescription = "Nota/Sublinhar/Cores", tint = Color.White)
@@ -2220,6 +2244,13 @@ class MainActivity : ComponentActivity() {
                             }
 
                             else -> {
+                                val filteredVoices = remember(availableVoices, voiceLangFilter) {
+                                    if (voiceLangFilter == "all") {
+                                        availableVoices
+                                    } else {
+                                        availableVoices.filter { it.locale.language.equals(voiceLangFilter, ignoreCase = true) }
+                                    }
+                                }
                                 LazyColumn(
                                     modifier = Modifier
                                         .fillMaxSize()
@@ -2345,6 +2376,29 @@ class MainActivity : ComponentActivity() {
                                     }
                                     item {
                                         Text("Motor de Voz (TTS / Neural / Online)", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Row(
+                                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            OutlinedButton(onClick = {
+                                                val intent = Intent(Settings.ACTION_TTS_SETTINGS).apply {
+                                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                }
+                                                runCatching { context.startActivity(intent) }
+                                            }) {
+                                                Text("Motor TTS do Sistema", maxLines = 1, softWrap = false)
+                                            }
+                                            OutlinedButton(onClick = {
+                                                val intent = Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA).apply {
+                                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                }
+                                                runCatching { context.startActivity(intent) }
+                                            }) {
+                                                Text("Baixar Vozes Offline", maxLines = 1, softWrap = false)
+                                            }
+                                        }
+                                        Spacer(modifier = Modifier.height(6.dp))
                                         VoiceProviderType.entries.forEach { providerType ->
                                             Column(modifier = Modifier.padding(vertical = 4.dp)) {
                                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2411,9 +2465,26 @@ class MainActivity : ComponentActivity() {
                                             }
                                         }
                                         if (availableVoices.isNotEmpty()) {
-                                            Spacer(modifier = Modifier.height(6.dp))
-                                            Text("Vozes disponíveis no sistema (${availableVoices.size}):", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = currentTheme.text)
-                                            availableVoices.take(8).forEach { v ->
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                            Text(
+                                                text = "Filtrar vozes (${filteredVoices.size} de ${availableVoices.size}):",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Medium,
+                                                color = currentTheme.text
+                                            )
+                                            Row(
+                                                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                listOf("pt" to "PT", "en" to "EN", "es" to "ES", "fr" to "FR", "all" to "Todas").forEach { (code, lbl) ->
+                                                    FilterChip(
+                                                        selected = voiceLangFilter == code,
+                                                        onClick = { voiceLangFilter = code },
+                                                        label = { Text(lbl, maxLines = 1, softWrap = false) }
+                                                    )
+                                                }
+                                            }
+                                            filteredVoices.take(10).forEach { v ->
                                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                                     RadioButton(
                                                         selected = selectedVoiceName == v.name,
