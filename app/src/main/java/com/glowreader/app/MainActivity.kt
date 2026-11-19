@@ -2,6 +2,7 @@ package com.glowreader.app
 
 import android.app.Activity
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
@@ -10,6 +11,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -37,6 +39,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalTextToolbar
@@ -339,7 +343,12 @@ class MainActivity : ComponentActivity() {
                     }
                     if (result.success && result.book != null && result.book.chapters.isNotEmpty()) {
                         withContext(Dispatchers.IO) {
-                            LibraryManager.saveBookToLibrary(context, result.book, "WEB")
+                            LibraryManager.saveBookToLibrary(
+                                context = context,
+                                parsed = result.book,
+                                format = "WEB",
+                                coverBitmap = result.book.coverBitmap
+                            )
                         }
                         refreshLibraryAndOrg()
                         webImportStatus = null
@@ -407,7 +416,12 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                             withContext(Dispatchers.IO) {
-                                LibraryManager.saveBookToLibrary(context, parsedBook, format)
+                                LibraryManager.saveBookToLibrary(
+                                    context = context,
+                                    parsed = parsedBook,
+                                    format = format,
+                                    coverBitmap = parsedBook.coverBitmap
+                                )
                             }
                             refreshLibraryAndOrg()
                             isImporting = false
@@ -1911,20 +1925,23 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             } else {
-                val recentMeta = savedBooks.firstOrNull()
-                val recentHomeBook = recentMeta?.let { meta ->
-                    val content = LibraryManager.loadBookContent(context, meta.id)
-                    val chTitle = content?.chapters?.getOrNull(meta.lastChapterIndex)?.title ?: "Capítulo ${meta.lastChapterIndex + 1}"
-                    val totalCh = (content?.chapters?.size ?: 1).coerceAtLeast(1)
-                    val prog = ((meta.lastChapterIndex + 1).toFloat() / totalCh.toFloat()).coerceIn(0f, 1f)
-                    HomeRecentBook(
-                        id = meta.id,
-                        title = meta.title,
-                        author = meta.format,
-                        chapterTitle = chTitle,
-                        progressPercent = prog,
-                        format = meta.format
-                    )
+                val recentMeta = remember(savedBooks, libraryVersion) { savedBooks.firstOrNull() }
+                val recentHomeBook = remember(recentMeta, libraryVersion) {
+                    recentMeta?.let { meta ->
+                        val content = LibraryManager.loadBookContent(context, meta.id)
+                        val chTitle = content?.chapters?.getOrNull(meta.lastChapterIndex)?.title
+                            ?: "Capítulo ${meta.lastChapterIndex + 1}"
+                        val totalCh = (content?.chapters?.size ?: meta.totalChapters.coerceAtLeast(1)).coerceAtLeast(1)
+                        val prog = ((meta.lastChapterIndex + 1).toFloat() / totalCh.toFloat()).coerceIn(0f, 1f)
+                        HomeRecentBook(
+                            id = meta.id,
+                            title = meta.title,
+                            author = "${meta.format} • $chTitle",
+                            chapterTitle = chTitle,
+                            progressPercent = prog,
+                            format = meta.format
+                        )
+                    }
                 }
 
                 Scaffold(
@@ -1932,9 +1949,12 @@ class MainActivity : ComponentActivity() {
                         NavigationBar(containerColor = currentTheme.barBg) {
                             NavigationBarItem(
                                 selected = currentTab == 0,
-                                onClick = { currentTab = 0 },
+                                onClick = {
+                                    refreshLibraryAndOrg()
+                                    currentTab = 0
+                                },
                                 icon = { Icon(Icons.Rounded.Home, contentDescription = null) },
-                                label = { Text("Início", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }
+                                label = { Text("Início", fontSize = 11.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }
                             )
                             NavigationBarItem(
                                 selected = currentTab == 1,
@@ -1943,19 +1963,19 @@ class MainActivity : ComponentActivity() {
                                     currentTab = 1
                                 },
                                 icon = { Icon(Icons.Rounded.LocalLibrary, contentDescription = null) },
-                                label = { Text("Biblioteca", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }
+                                label = { Text("Biblioteca", fontSize = 11.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }
                             )
                             NavigationBarItem(
                                 selected = currentTab == 2,
                                 onClick = { currentTab = 2 },
                                 icon = { Icon(Icons.Rounded.Book, contentDescription = null) },
-                                label = { Text("Caderno", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }
+                                label = { Text("Caderno", fontSize = 11.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }
                             )
                             NavigationBarItem(
                                 selected = currentTab == 3,
                                 onClick = { currentTab = 3 },
                                 icon = { Icon(Icons.Rounded.Settings, contentDescription = null) },
-                                label = { Text("Definições", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }
+                                label = { Text("Ajustes", fontSize = 11.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }
                             )
                         }
                     }
@@ -2022,6 +2042,18 @@ class MainActivity : ComponentActivity() {
                                     fun BookCardContent(book: SavedBookMeta, compact: Boolean) {
                                         val metaOrg = orgMetaMap[book.id]
                                         val progressPct = (LibraryOrganizationManager.estimateBookProgress(context, book) * 100).toInt()
+                                        val coverImageBitmap = remember(book.coverPath, book.id) {
+                                            if (book.coverPath.isNotBlank()) {
+                                                val file = File(book.coverPath)
+                                                if (file.exists()) {
+                                                    BitmapFactory.decodeFile(file.absolutePath)?.asImageBitmap()
+                                                } else {
+                                                    null
+                                                }
+                                            } else {
+                                                null
+                                            }
+                                        }
                                         val coverGradient = when (book.format.uppercase(Locale.ROOT)) {
                                             "EPUB" -> Brush.verticalGradient(listOf(Color(0xFF1F4E43), Color(0xFF10241F)))
                                             "PDF" -> Brush.verticalGradient(listOf(Color(0xFF6A3B28), Color(0xFF261711)))
@@ -2050,6 +2082,27 @@ class MainActivity : ComponentActivity() {
                                                 .background(coverGradient)
                                                 .clickable { openBookMeta(book) }
                                         ) {
+                                            if (coverImageBitmap != null) {
+                                                Image(
+                                                    bitmap = coverImageBitmap,
+                                                    contentDescription = book.title,
+                                                    contentScale = ContentScale.Crop,
+                                                    modifier = Modifier.fillMaxSize()
+                                                )
+                                                Box(
+                                                    modifier = Modifier
+                                                        .fillMaxSize()
+                                                        .background(
+                                                            Brush.verticalGradient(
+                                                                colors = listOf(
+                                                                    Color.Black.copy(alpha = 0.25f),
+                                                                    Color.Black.copy(alpha = 0.72f)
+                                                                )
+                                                            )
+                                                        )
+                                                )
+                                            }
+
                                             if (libraryLayoutMode == LibraryLayoutMode.GRID) {
                                                 Column(
                                                     modifier = Modifier
@@ -2169,12 +2222,21 @@ class MainActivity : ComponentActivity() {
                                                             .background(Color.Black.copy(alpha = 0.35f)),
                                                         contentAlignment = Alignment.Center
                                                     ) {
-                                                        Text(
-                                                            text = book.format,
-                                                            color = Color.White,
-                                                            fontSize = 10.sp,
-                                                            fontWeight = FontWeight.Bold
-                                                        )
+                                                        if (coverImageBitmap != null) {
+                                                            Image(
+                                                                bitmap = coverImageBitmap,
+                                                                contentDescription = book.title,
+                                                                contentScale = ContentScale.Crop,
+                                                                modifier = Modifier.fillMaxSize()
+                                                            )
+                                                        } else {
+                                                            Text(
+                                                                text = book.format,
+                                                                color = Color.White,
+                                                                fontSize = 10.sp,
+                                                                fontWeight = FontWeight.Bold
+                                                            )
+                                                        }
                                                     }
                                                     Spacer(modifier = Modifier.width(10.dp))
                                                     Column(modifier = Modifier.weight(1f)) {
@@ -2628,7 +2690,7 @@ class MainActivity : ComponentActivity() {
                                     verticalArrangement = Arrangement.spacedBy(14.dp)
                                 ) {
                                     item {
-                                        Text("Definições", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = currentTheme.text)
+                                        Text("Ajustes", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = currentTheme.text)
                                     }
                                     item {
                                         Text("Tema da leitura", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
