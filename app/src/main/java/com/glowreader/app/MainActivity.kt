@@ -791,4 +791,210 @@ class MainActivity : ComponentActivity() {
                             NavigationBarItem(
                                 selected = currentTab == 2,
                                 onClick = { currentTab = 2 },
-                               
+                                icon = { Icon(Icons.Rounded.Book, contentDescription = null) },
+                                label = { Text("Caderno") }
+                            )
+                            NavigationBarItem(
+                                selected = currentTab == 3,
+                                onClick = { currentTab = 3 },
+                                icon = { Icon(Icons.Rounded.Settings, contentDescription = null) },
+                                label = { Text("Definições") }
+                            )
+                        }
+                    }
+                ) { innerPadding ->
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(innerPadding)
+                    ) {
+                        when (currentTab) {
+                            0 -> HomeScreen(
+                                theme = currentTheme,
+                                recentBook = recentHomeBook,
+                                totalBooksCount = savedBooks.size,
+                                totalNotesCount = annotations.size,
+                                onContinueReading = {
+                                    if (recentMeta != null) {
+                                        openBookMeta(recentMeta)
+                                    } else {
+                                        filePicker.launch(arrayOf("application/epub+zip", "application/pdf", "text/plain"))
+                                    }
+                                },
+                                onOpenLibrary = { currentTab = 1 },
+                                onOpenNotebook = { currentTab = 2 },
+                                onOpenSettings = { currentTab = 3 },
+                                onImportBook = {
+                                    showWebImportDialog = true
+                                }
+                            )
+
+                            1 -> {
+                                if (isImporting) {
+                                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                        CircularProgressIndicator(color = Color(0xFF4F46E5))
+                                    }
+                                } else {
+                                    LazyColumn(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .background(currentTheme.bg)
+                                            .padding(16.dp),
+                                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        item {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text("Biblioteca", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = currentTheme.text)
+                                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                    FilledTonalButton(onClick = { showWebImportDialog = true }) {
+                                                        Icon(Icons.Rounded.Language, contentDescription = null)
+                                                        Spacer(modifier = Modifier.width(4.dp))
+                                                        Text("URL")
+                                                    }
+                                                    Button(onClick = {
+                                                        filePicker.launch(arrayOf("application/epub+zip", "application/pdf", "text/plain"))
+                                                    }) {
+                                                        Icon(Icons.Rounded.Add, contentDescription = null)
+                                                        Spacer(modifier = Modifier.width(4.dp))
+                                                        Text("Ficheiro")
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if (savedBooks.isEmpty()) {
+                                            item {
+                                                Text(
+                                                    text = "A tua biblioteca ainda está vazia. Toca em Ficheiro ou URL para adicionar conteúdo.",
+                                                    color = currentTheme.text.copy(alpha = 0.75f),
+                                                    modifier = Modifier.padding(top = 24.dp)
+                                                )
+                                            }
+                                        } else {
+                                            items(savedBooks, key = { it.id }) { book ->
+                                                Card(
+                                                    colors = CardDefaults.cardColors(containerColor = currentTheme.barBg),
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .clickable { openBookMeta(book) }
+                                                ) {
+                                                    Row(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .padding(14.dp),
+                                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Column(modifier = Modifier.weight(1f)) {
+                                                            Text(book.title, fontWeight = FontWeight.Bold, color = currentTheme.text)
+                                                            Text("Formato: ${book.format}", fontSize = 12.sp, color = currentTheme.text.copy(alpha = 0.7f))
+                                                        }
+                                                        IconButton(onClick = {
+                                                            LibraryManager.deleteBook(context, book.id)
+                                                            savedBooks = LibraryManager.loadLibrary(context)
+                                                        }) {
+                                                            Icon(Icons.Rounded.Delete, contentDescription = "Remover", tint = currentTheme.text)
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            2 -> {
+                                LazyColumn(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(currentTheme.bg)
+                                        .padding(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    item {
+                                        Text("Caderno", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = currentTheme.text)
+                                    }
+                                    if (annotations.isEmpty()) {
+                                        item {
+                                            Text(
+                                                text = "Ainda não tens notas ou destaques guardados.",
+                                                color = currentTheme.text.copy(alpha = 0.75f),
+                                                modifier = Modifier.padding(top = 24.dp)
+                                            )
+                                        }
+                                    } else {
+                                        items(annotations, key = { it.id }) { ann ->
+                                            Card(
+                                                colors = CardDefaults.cardColors(containerColor = currentTheme.barBg),
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(14.dp),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.Top
+                                                ) {
+                                                    Column(modifier = Modifier.weight(1f)) {
+                                                        Text(ann.bookTitle, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = currentTheme.text)
+                                                        if (ann.selectedText.isNotBlank()) {
+                                                            Text(ann.selectedText, fontSize = 13.sp, color = currentTheme.text.copy(alpha = 0.85f))
+                                                        }
+                                                        if (ann.note.isNotBlank()) {
+                                                            Text("Nota: ${ann.note}", fontSize = 12.sp, color = Color(0xFF4F46E5))
+                                                        }
+                                                    }
+                                                    IconButton(onClick = {
+                                                        annotations = annotations.filterNot { it.id == ann.id }
+                                                        ReaderStorage.saveAnnotations(context, annotations)
+                                                    }) {
+                                                        Icon(Icons.Rounded.Delete, contentDescription = "Apagar nota", tint = currentTheme.text)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            else -> {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(currentTheme.bg)
+                                        .padding(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                                ) {
+                                    Text("Definições", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = currentTheme.text)
+                                    Text("Tema da leitura", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        ReaderTheme.entries.forEach { themeOption ->
+                                            FilterChip(
+                                                selected = currentTheme == themeOption,
+                                                onClick = { currentTheme = themeOption },
+                                                label = { Text(themeOption.label) }
+                                            )
+                                        }
+                                    }
+                                    Text("Fornecedor de dicionário/tradutor", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
+                                    listOf("Google Tradutor", "Priberam / Dicio", "Linguee / DeepL").forEach { provider ->
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            RadioButton(
+                                                selected = dictionaryProvider == provider,
+                                                onClick = { dictionaryProvider = provider }
+                                            )
+                                            Text(provider, color = currentTheme.text)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
