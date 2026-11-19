@@ -1226,13 +1226,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                LaunchedEffect(scrollState.isScrollInProgress, barsBehaviorMode) {
-                    if (scrollState.isScrollInProgress && barsBehaviorMode == BarsBehaviorMode.HIDE_ON_ADVANCE) {
-                        barsVisible = false
-                        showStudyBanner = false
-                    }
-                }
-
                 var showTocSheet by remember { mutableStateOf(false) }
                 var showListenSheet by remember { mutableStateOf(false) }
                 var listenSheetTab by remember { mutableIntStateOf(0) }
@@ -1243,6 +1236,13 @@ class MainActivity : ComponentActivity() {
                 var draftNote by remember { mutableStateOf("") }
                 var draftUnderline by remember { mutableStateOf(false) }
                 var showStudyBanner by remember { mutableStateOf(false) }
+
+                LaunchedEffect(scrollState, scrollState.isScrollInProgress, barsBehaviorMode) {
+                    if (scrollState.isScrollInProgress && barsBehaviorMode == BarsBehaviorMode.HIDE_ON_ADVANCE) {
+                        barsVisible = false
+                        showStudyBanner = false
+                    }
+                }
 
                 fun closeReaderBackToLibrary() {
                     autoScrollEnabled = false
