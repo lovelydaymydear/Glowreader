@@ -87,10 +87,14 @@ object BookParser {
     }
 
     private fun cleanTextNoise(raw: String): String {
+        val pageNoiseRegex = Regex("^(Pág\\.|Página|Page)\\s*\\d+.*$", RegexOption.IGNORE_CASE)
+        val numberOnlyRegex = Regex("^\\d+$")
         return raw.lines()
             .map { it.trim() }
             .filter { line ->
-                line.isNotEmpty() && !line.matches(Regex("^\\d+$")) && !line.matches(Regex("^(Pág\\.\vert{}Página\vert{}Page)\\s*\\d+.*$", RegexOption.IGNORE_CASE))
+                line.isNotEmpty() &&
+                    !numberOnlyRegex.matches(line) &&
+                    !pageNoiseRegex.matches(line)
             }
             .joinToString("\n")
     }
