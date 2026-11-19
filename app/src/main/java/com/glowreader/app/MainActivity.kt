@@ -330,6 +330,7 @@ class MainActivity : ComponentActivity() {
                                 LibraryManager.saveBookToLibrary(context, parsedBook, format)
                             }
                             refreshLibraryAndOrg()
+                            currentTab = 1
                         }
                         isImporting = false
                     }
@@ -381,11 +382,13 @@ class MainActivity : ComponentActivity() {
                             pendingOpenBookMeta = null
                             launchBookWithReflow(target, defaultReflowMode)
                         }) {
-                            Text("Abrir padrão")
+                            Text("Abrir padrão", maxLines = 1, softWrap = false)
                         }
                     },
                     dismissButton = {
-                        TextButton(onClick = { pendingOpenBookMeta = null }) { Text("Cancelar") }
+                        TextButton(onClick = { pendingOpenBookMeta = null }) {
+                            Text("Cancelar", maxLines = 1, softWrap = false)
+                        }
                     }
                 )
             }
@@ -411,7 +414,11 @@ class MainActivity : ComponentActivity() {
                             )
 
                             Text("Mistura de duas cores:", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 listOf(
                                     Color(0xFFFFEB3B),
                                     Color(0xFF81D4FA),
@@ -467,7 +474,7 @@ class MainActivity : ComponentActivity() {
                                         .background(mixedPreview)
                                         .border(1.dp, Color.Gray, RoundedCornerShape(8.dp))
                                 )
-                                Text("Mistura", fontSize = 12.sp)
+                                Text("Mistura", fontSize = 12.sp, maxLines = 1, softWrap = false)
                                 Box(
                                     modifier = Modifier
                                         .size(36.dp)
@@ -475,7 +482,7 @@ class MainActivity : ComponentActivity() {
                                         .background(rgbPreview)
                                         .border(1.dp, Color.Gray, RoundedCornerShape(8.dp))
                                 )
-                                Text("RGB", fontSize = 12.sp)
+                                Text("RGB", fontSize = 12.sp, maxLines = 1, softWrap = false)
                             }
                         }
                     },
@@ -492,7 +499,7 @@ class MainActivity : ComponentActivity() {
                                 newCustomColorName = ""
                                 showColorMixerDialog = false
                             }) {
-                                Text("Guardar RGB")
+                                Text("Guardar RGB", maxLines = 1, softWrap = false)
                             }
                             Button(onClick = {
                                 val savedList = ReadingEnhancementManager.saveCustomColor(
@@ -505,12 +512,14 @@ class MainActivity : ComponentActivity() {
                                 newCustomColorName = ""
                                 showColorMixerDialog = false
                             }) {
-                                Text("Guardar Mistura")
+                                Text("Guardar Mistura", maxLines = 1, softWrap = false)
                             }
                         }
                     },
                     dismissButton = {
-                        TextButton(onClick = { showColorMixerDialog = false }) { Text("Cancelar") }
+                        TextButton(onClick = { showColorMixerDialog = false }) {
+                            Text("Cancelar", maxLines = 1, softWrap = false)
+                        }
                     }
                 )
             }
@@ -540,13 +549,15 @@ class MainActivity : ComponentActivity() {
                                     },
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Text(target.label)
+                                    Text(target.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                             }
                         }
                     },
                     confirmButton = {
-                        TextButton(onClick = { showResearchHubDialog = false }) { Text("Fechar") }
+                        TextButton(onClick = { showResearchHubDialog = false }) {
+                            Text("Fechar", maxLines = 1, softWrap = false)
+                        }
                     }
                 )
             }
@@ -573,11 +584,13 @@ class MainActivity : ComponentActivity() {
                             }
                             showAddCategoryDialog = false
                         }) {
-                            Text("Criar")
+                            Text("Criar", maxLines = 1, softWrap = false)
                         }
                     },
                     dismissButton = {
-                        TextButton(onClick = { showAddCategoryDialog = false }) { Text("Cancelar") }
+                        TextButton(onClick = { showAddCategoryDialog = false }) {
+                            Text("Cancelar", maxLines = 1, softWrap = false)
+                        }
                     }
                 )
             }
@@ -614,7 +627,9 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                     confirmButton = {
-                        TextButton(onClick = { categoryTargetBook = null }) { Text("Fechar") }
+                        TextButton(onClick = { categoryTargetBook = null }) {
+                            Text("Fechar", maxLines = 1, softWrap = false)
+                        }
                     }
                 )
             }
@@ -684,14 +699,16 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         }) {
-                            Text("Confirmar")
+                            Text("Confirmar", maxLines = 1, softWrap = false)
                         }
                     },
                     dismissButton = {
                         TextButton(onClick = {
                             showSecretPinDialog = false
                             pendingSecretBookToggle = null
-                        }) { Text("Cancelar") }
+                        }) {
+                            Text("Cancelar", maxLines = 1, softWrap = false)
+                        }
                     }
                 )
             }
@@ -752,7 +769,7 @@ class MainActivity : ComponentActivity() {
                                                         LibraryManager.deleteBook(context, dup.id)
                                                         refreshLibraryAndOrg()
                                                     }) {
-                                                        Text("Remover esta cópia", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                                                        Text("Remover cópia", fontSize = 12.sp, color = MaterialTheme.colorScheme.error, maxLines = 1, softWrap = false)
                                                     }
                                                 }
                                             }
@@ -816,7 +833,7 @@ class MainActivity : ComponentActivity() {
                             onClick = { triggerWebImport(webUrlInput) },
                             enabled = !isImporting && webUrlInput.isNotBlank()
                         ) {
-                            Text("Importar link")
+                            Text("Importar link", maxLines = 1, softWrap = false)
                         }
                     },
                     dismissButton = {
@@ -828,7 +845,7 @@ class MainActivity : ComponentActivity() {
                             },
                             enabled = !isImporting
                         ) {
-                            Text("Cancelar")
+                            Text("Cancelar", maxLines = 1, softWrap = false)
                         }
                     }
                 )
@@ -947,16 +964,22 @@ class MainActivity : ComponentActivity() {
                                 fontSize = 18.sp,
                                 color = currentTheme.text
                             )
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
                                 listOf("pt", "en", "es", "fr").forEach { lang ->
                                     FilterChip(
                                         selected = translationTargetLang == lang,
                                         onClick = { translationTargetLang = lang },
-                                        label = { Text("→ ${lang.uppercase()}") }
+                                        label = { Text("→ ${lang.uppercase()}", maxLines = 1, softWrap = false) }
                                     )
                                 }
                             }
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
                                 Button(
                                     onClick = {
                                         isTranslating = true
@@ -978,7 +1001,7 @@ class MainActivity : ComponentActivity() {
                                     },
                                     enabled = !isTranslating
                                 ) {
-                                    Text("Traduzir capítulo")
+                                    Text("Traduzir capítulo", maxLines = 1, softWrap = false)
                                 }
                                 OutlinedButton(
                                     onClick = {
@@ -1004,7 +1027,7 @@ class MainActivity : ComponentActivity() {
                                     },
                                     enabled = !isTranslating
                                 ) {
-                                    Text("Traduzir livro todo")
+                                    Text("Traduzir livro todo", maxLines = 1, softWrap = false)
                                 }
                             }
                             if (translatedChaptersMap.isNotEmpty()) {
@@ -1072,7 +1095,12 @@ class MainActivity : ComponentActivity() {
                             ) {
                                 Icon(Icons.Rounded.AudioFile, contentDescription = null)
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text(if (isExportingAudio) "A exportar..." else "Guardar áudio deste capítulo")
+                                Text(
+                                    text = if (isExportingAudio) "A exportar..." else "Guardar áudio deste capítulo",
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             }
 
                             if (audioStatusMessage != null) {
@@ -1185,17 +1213,18 @@ class MainActivity : ComponentActivity() {
                                 OutlinedTextField(
                                     value = draftSelection,
                                     onValueChange = { draftSelection = it },
-                                    label = { Text("Trecho selecionado") },
-                                    maxLines = 3
+                                    label = { Text("Trecho ou palavra") },
+                                    maxLines = 3,
+                                    modifier = Modifier.fillMaxWidth()
                                 )
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text("Cores de destaque:", fontSize = 13.sp)
+                                    Text("Paleta de cores:", fontSize = 13.sp, maxLines = 1, softWrap = false)
                                     TextButton(onClick = { showColorMixerDialog = true }) {
-                                        Text("+ Misturar / Criar")
+                                        Text("+ Misturar / Criar", maxLines = 1, softWrap = false)
                                     }
                                 }
                                 Row(
@@ -1228,23 +1257,25 @@ class MainActivity : ComponentActivity() {
                                     value = draftNote,
                                     onValueChange = { draftNote = it },
                                     label = { Text("Nota pessoal (opcional)") },
-                                    maxLines = 3
+                                    maxLines = 3,
+                                    modifier = Modifier.fillMaxWidth()
                                 )
-                                if (draftSelection.isNotBlank()) {
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        TextButton(onClick = { openDictionaryOrTranslate(draftSelection) }) {
-                                            Icon(Icons.Rounded.Translate, contentDescription = null)
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text("Traduzir")
-                                        }
-                                        TextButton(onClick = {
-                                            researchQueryInput = draftSelection
-                                            showResearchHubDialog = true
-                                        }) {
-                                            Icon(Icons.Rounded.Search, contentDescription = null)
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text("IA / Google")
-                                        }
+                                Row(
+                                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    OutlinedButton(onClick = { openDictionaryOrTranslate(draftSelection) }) {
+                                        Icon(Icons.Rounded.Translate, contentDescription = null)
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Dicionário / Tradutor", maxLines = 1, softWrap = false)
+                                    }
+                                    OutlinedButton(onClick = {
+                                        researchQueryInput = draftSelection
+                                        showResearchHubDialog = true
+                                    }) {
+                                        Icon(Icons.Rounded.Search, contentDescription = null)
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("IA / Google", maxLines = 1, softWrap = false)
                                     }
                                 }
                             }
@@ -1266,10 +1297,12 @@ class MainActivity : ComponentActivity() {
                                 }
                                 showNoteDialog = false
                                 showStudyBanner = false
-                            }) { Text("Guardar") }
+                            }) { Text("Guardar", maxLines = 1, softWrap = false) }
                         },
                         dismissButton = {
-                            TextButton(onClick = { showNoteDialog = false }) { Text("Cancelar") }
+                            TextButton(onClick = { showNoteDialog = false }) {
+                                Text("Cancelar", maxLines = 1, softWrap = false)
+                            }
                         }
                     )
                 }
@@ -1384,7 +1417,27 @@ class MainActivity : ComponentActivity() {
                                             color = currentTheme.text.copy(alpha = 0.65f)
                                         )
                                     }
-                                    Row {
+                                    Row(
+                                        modifier = Modifier
+                                            .widthIn(max = 210.dp)
+                                            .horizontalScroll(rememberScrollState())
+                                    ) {
+                                        IconButton(
+                                            onClick = {
+                                                val clipNow = clipboard.getText()?.text ?: ""
+                                                if (clipNow.isNotBlank() && draftSelection.isBlank()) {
+                                                    draftSelection = clipNow
+                                                }
+                                                showNoteDialog = true
+                                            },
+                                            modifier = Modifier.size(34.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.EditNote,
+                                                contentDescription = "Paleta, sublinhar e nota",
+                                                tint = currentTheme.text
+                                            )
+                                        }
                                         IconButton(
                                             onClick = {
                                                 activeReflowMode = if (activeReflowMode == ReflowMode.AUTO_ADAPT) {
@@ -1413,7 +1466,7 @@ class MainActivity : ComponentActivity() {
                                         }
                                         IconButton(
                                             onClick = {
-                                                researchQueryInput = ""
+                                                researchQueryInput = draftSelection
                                                 showResearchHubDialog = true
                                             },
                                             modifier = Modifier.size(34.dp)
@@ -1558,12 +1611,14 @@ class MainActivity : ComponentActivity() {
                                         },
                                         enabled = currentPageIndex > 0
                                     ) {
-                                        Text("Página anterior")
+                                        Text("Anterior", maxLines = 1, softWrap = false)
                                     }
                                     Text(
                                         text = "${currentPageIndex + 1} / ${pages.size}",
                                         color = currentTheme.text,
-                                        fontWeight = FontWeight.SemiBold
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                        softWrap = false
                                     )
                                     Button(
                                         onClick = {
@@ -1576,7 +1631,7 @@ class MainActivity : ComponentActivity() {
                                         },
                                         enabled = currentPageIndex < pages.lastIndex
                                     ) {
-                                        Text("Próxima página")
+                                        Text("Seguinte", maxLines = 1, softWrap = false)
                                     }
                                 }
                             }
@@ -1593,7 +1648,9 @@ class MainActivity : ComponentActivity() {
                                 shadowElevation = 10.dp
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                    modifier = Modifier
+                                        .horizontalScroll(rememberScrollState())
+                                        .padding(horizontal = 14.dp, vertical = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
@@ -1620,12 +1677,15 @@ class MainActivity : ComponentActivity() {
                                     IconButton(onClick = { showNoteDialog = true }, modifier = Modifier.size(32.dp)) {
                                         Icon(Icons.Rounded.EditNote, contentDescription = "Nota/Sublinhar/Cores", tint = Color.White)
                                     }
+                                    IconButton(onClick = { openDictionaryOrTranslate(draftSelection) }, modifier = Modifier.size(32.dp)) {
+                                        Icon(Icons.Rounded.Translate, contentDescription = "Dicionário / Tradutor", tint = Color.White)
+                                    }
                                     IconButton(onClick = {
                                         researchQueryInput = draftSelection
                                         showResearchHubDialog = true
                                         showStudyBanner = false
                                     }, modifier = Modifier.size(32.dp)) {
-                                        Icon(Icons.Rounded.TravelExplore, contentDescription = "IA / Google / Traduzir", tint = Color.White)
+                                        Icon(Icons.Rounded.TravelExplore, contentDescription = "IA / Google", tint = Color.White)
                                     }
                                     IconButton(onClick = { showStudyBanner = false }, modifier = Modifier.size(28.dp)) {
                                         Icon(Icons.Rounded.Close, contentDescription = "Fechar", tint = Color.Gray)
@@ -1661,7 +1721,7 @@ class MainActivity : ComponentActivity() {
                                             startAudio(textContent)
                                         }
                                     }) {
-                                        Text("${speechRate}x", fontWeight = FontWeight.Bold, color = currentTheme.text)
+                                        Text("${speechRate}x", fontWeight = FontWeight.Bold, color = currentTheme.text, maxLines = 1, softWrap = false)
                                     }
                                     IconButton(
                                         onClick = {
@@ -1735,25 +1795,25 @@ class MainActivity : ComponentActivity() {
                                 selected = currentTab == 0,
                                 onClick = { currentTab = 0 },
                                 icon = { Icon(Icons.Rounded.Home, contentDescription = null) },
-                                label = { Text("Início") }
+                                label = { Text("Início", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }
                             )
                             NavigationBarItem(
                                 selected = currentTab == 1,
                                 onClick = { currentTab = 1 },
                                 icon = { Icon(Icons.Rounded.LocalLibrary, contentDescription = null) },
-                                label = { Text("Biblioteca") }
+                                label = { Text("Biblioteca", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }
                             )
                             NavigationBarItem(
                                 selected = currentTab == 2,
                                 onClick = { currentTab = 2 },
                                 icon = { Icon(Icons.Rounded.Book, contentDescription = null) },
-                                label = { Text("Caderno") }
+                                label = { Text("Caderno", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }
                             )
                             NavigationBarItem(
                                 selected = currentTab == 3,
                                 onClick = { currentTab = 3 },
                                 icon = { Icon(Icons.Rounded.Settings, contentDescription = null) },
-                                label = { Text("Definições") }
+                                label = { Text("Definições", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }
                             )
                         }
                     }
@@ -1780,7 +1840,7 @@ class MainActivity : ComponentActivity() {
                                 onOpenNotebook = { currentTab = 2 },
                                 onOpenSettings = { currentTab = 3 },
                                 onImportBook = {
-                                    showWebImportDialog = true
+                                    filePicker.launch(arrayOf("application/epub+zip", "application/pdf", "text/plain"))
                                 }
                             )
 
@@ -1818,7 +1878,10 @@ class MainActivity : ComponentActivity() {
                                                     text = if (showSecretShelf) "Estante Secreta" else "Biblioteca",
                                                     fontSize = 24.sp,
                                                     fontWeight = FontWeight.Bold,
-                                                    color = currentTheme.text
+                                                    color = currentTheme.text,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    modifier = Modifier.weight(1f)
                                                 )
                                                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                                     IconButton(onClick = { showDuplicatesSheet = true }) {
@@ -1846,14 +1909,14 @@ class MainActivity : ComponentActivity() {
                                                     FilledTonalButton(onClick = { showWebImportDialog = true }) {
                                                         Icon(Icons.Rounded.Language, contentDescription = null)
                                                         Spacer(modifier = Modifier.width(4.dp))
-                                                        Text("URL")
+                                                        Text("URL", maxLines = 1, softWrap = false)
                                                     }
                                                     Button(onClick = {
                                                         filePicker.launch(arrayOf("application/epub+zip", "application/pdf", "text/plain"))
                                                     }) {
                                                         Icon(Icons.Rounded.Add, contentDescription = null)
                                                         Spacer(modifier = Modifier.width(4.dp))
-                                                        Text("Ficheiro")
+                                                        Text("Ficheiro", maxLines = 1, softWrap = false)
                                                     }
                                                 }
                                             }
@@ -1883,7 +1946,7 @@ class MainActivity : ComponentActivity() {
                                                         FilterChip(
                                                             selected = selectedCategory == cat,
                                                             onClick = { selectedCategory = cat },
-                                                            label = { Text(cat) }
+                                                            label = { Text(cat, maxLines = 1, softWrap = false) }
                                                         )
                                                     }
                                                     FilterChip(
@@ -1892,7 +1955,7 @@ class MainActivity : ComponentActivity() {
                                                             newCategoryName = ""
                                                             showAddCategoryDialog = true
                                                         },
-                                                        label = { Text("+ Categoria") }
+                                                        label = { Text("+ Categoria", maxLines = 1, softWrap = false) }
                                                     )
                                                 }
                                             }
@@ -1910,14 +1973,14 @@ class MainActivity : ComponentActivity() {
                                                     FilterChip(
                                                         selected = formatFilter == fmt,
                                                         onClick = { formatFilter = fmt },
-                                                        label = { Text(fmt) }
+                                                        label = { Text(fmt, maxLines = 1, softWrap = false) }
                                                     )
                                                 }
                                                 LibrarySortOption.entries.forEach { opt ->
                                                     FilterChip(
                                                         selected = sortOption == opt,
                                                         onClick = { sortOption = opt },
-                                                        label = { Text(opt.label) }
+                                                        label = { Text(opt.label, maxLines = 1, softWrap = false) }
                                                     )
                                                 }
                                             }
@@ -2002,7 +2065,7 @@ class MainActivity : ComponentActivity() {
                                             colors = CardDefaults.cardColors(containerColor = currentTheme.barBg),
                                             modifier = Modifier.fillMaxWidth()
                                         ) {
-                                            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                                 Text("Resumo de Estudo", fontWeight = FontWeight.Bold, color = currentTheme.text)
                                                 Text(
                                                     text = "Total: ${stats.totalEntries} • Notas: ${stats.notesCount} • Destaques: ${stats.highlightsCount}",
@@ -2014,7 +2077,10 @@ class MainActivity : ComponentActivity() {
                                                     fontSize = 12.sp,
                                                     color = currentTheme.text.copy(alpha = 0.8f)
                                                 )
-                                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                Row(
+                                                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                                ) {
                                                     OutlinedButton(onClick = {
                                                         val res = StudyNotebookManager.exportAnnotationsToFile(context, annotations)
                                                         exportStatusMessage = if (res.isSuccess) {
@@ -2023,14 +2089,14 @@ class MainActivity : ComponentActivity() {
                                                             "Falha ao exportar."
                                                         }
                                                     }) {
-                                                        Text("Exportar .MD")
+                                                        Text("Exportar .MD", maxLines = 1, softWrap = false)
                                                     }
                                                     OutlinedButton(onClick = {
                                                         val md = StudyNotebookManager.formatAnnotationsAsMarkdown(annotations)
                                                         clipboard.setText(AnnotatedString(md))
                                                         exportStatusMessage = "Caderno copiado para a área de transferência."
                                                     }) {
-                                                        Text("Copiar resumo")
+                                                        Text("Copiar resumo", maxLines = 1, softWrap = false)
                                                     }
                                                 }
                                                 if (exportStatusMessage != null) {
@@ -2047,43 +2113,44 @@ class MainActivity : ComponentActivity() {
                                         ) {
                                             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                                 Text("Dicionário, Tradutor, IA e Google", fontWeight = FontWeight.Bold, color = currentTheme.text)
+                                                OutlinedTextField(
+                                                    value = lookupQueryInput,
+                                                    onValueChange = { lookupQueryInput = it },
+                                                    label = { Text("Palavra, conceito ou pergunta") },
+                                                    singleLine = true,
+                                                    modifier = Modifier.fillMaxWidth()
+                                                )
                                                 Row(
-                                                    modifier = Modifier.fillMaxWidth(),
+                                                    modifier = Modifier.horizontalScroll(rememberScrollState()),
                                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                                     verticalAlignment = Alignment.CenterVertically
                                                 ) {
-                                                    OutlinedTextField(
-                                                        value = lookupQueryInput,
-                                                        onValueChange = { lookupQueryInput = it },
-                                                        label = { Text("Palavra, conceito ou pergunta") },
-                                                        singleLine = true,
-                                                        modifier = Modifier.weight(1f)
-                                                    )
                                                     Button(onClick = { openDictionaryOrTranslate(lookupQueryInput) }) {
-                                                        Text("Consultar")
+                                                        Text("Consultar", maxLines = 1, softWrap = false)
                                                     }
-                                                }
-                                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                                     OutlinedButton(onClick = {
                                                         openResearchTarget(ResearchToolTarget.GOOGLE_SEARCH, lookupQueryInput)
                                                     }) {
-                                                        Text("Google")
+                                                        Text("Google", maxLines = 1, softWrap = false)
                                                     }
                                                     OutlinedButton(onClick = {
                                                         openResearchTarget(ResearchToolTarget.AI_ASSISTANT, lookupQueryInput)
                                                     }) {
-                                                        Text("IA na App")
+                                                        Text("IA na App", maxLines = 1, softWrap = false)
                                                     }
                                                     OutlinedButton(onClick = { showColorMixerDialog = true }) {
-                                                        Text("Cores / Mistura")
+                                                        Text("Paleta", maxLines = 1, softWrap = false)
                                                     }
                                                 }
-                                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                Row(
+                                                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
                                                     listOf("pt", "en", "es", "fr").forEach { langCode ->
                                                         FilterChip(
                                                             selected = translationTargetLang == langCode,
                                                             onClick = { translationTargetLang = langCode },
-                                                            label = { Text("→ ${langCode.uppercase()}") }
+                                                            label = { Text("→ ${langCode.uppercase()}", maxLines = 1, softWrap = false) }
                                                         )
                                                     }
                                                 }
@@ -2166,12 +2233,15 @@ class MainActivity : ComponentActivity() {
                                     item {
                                         Text("Tema da leitura", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
                                         Spacer(modifier = Modifier.height(6.dp))
-                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Row(
+                                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
                                             ReaderTheme.entries.forEach { themeOption ->
                                                 FilterChip(
                                                     selected = currentTheme == themeOption,
                                                     onClick = { currentTheme = themeOption },
-                                                    label = { Text(themeOption.label) }
+                                                    label = { Text(themeOption.label, maxLines = 1, softWrap = false) }
                                                 )
                                             }
                                         }
@@ -2208,12 +2278,15 @@ class MainActivity : ComponentActivity() {
                                     item {
                                         Text("Modo de leitura", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
                                         Spacer(modifier = Modifier.height(6.dp))
-                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Row(
+                                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
                                             ReadingViewMode.entries.forEach { modeOption ->
                                                 FilterChip(
                                                     selected = readingViewMode == modeOption,
                                                     onClick = { readingViewMode = modeOption },
-                                                    label = { Text(modeOption.label) }
+                                                    label = { Text(modeOption.label, maxLines = 1, softWrap = false) }
                                                 )
                                             }
                                         }
@@ -2246,20 +2319,27 @@ class MainActivity : ComponentActivity() {
                                     item {
                                         Text("Estante secreta e segurança", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
                                         Spacer(modifier = Modifier.height(6.dp))
-                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Row(
+                                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
                                             OutlinedButton(onClick = {
                                                 pendingSecretBookToggle = null
                                                 secretPinInput = ""
                                                 secretPinError = null
                                                 showSecretPinDialog = true
                                             }) {
-                                                Text(if (LibraryOrganizationManager.hasSecretPin(context)) "Alterar / Verificar PIN" else "Definir PIN")
+                                                Text(
+                                                    text = if (LibraryOrganizationManager.hasSecretPin(context)) "Alterar / Verificar PIN" else "Definir PIN",
+                                                    maxLines = 1,
+                                                    softWrap = false
+                                                )
                                             }
                                             OutlinedButton(onClick = {
                                                 LibraryOrganizationManager.lockSecretShelf(context)
                                                 showSecretShelf = false
                                             }) {
-                                                Text("Bloquear estante")
+                                                Text("Bloquear estante", maxLines = 1, softWrap = false)
                                             }
                                         }
                                     }
@@ -2323,7 +2403,7 @@ class MainActivity : ComponentActivity() {
                                                         onlineTestResult = if (ok) "Ligação ao serviço de voz ativa." else "Sem resposta ou URL inválida."
                                                     }
                                                 }) {
-                                                    Text("Testar ligação")
+                                                    Text("Testar ligação", maxLines = 1, softWrap = false)
                                                 }
                                                 if (onlineTestResult != null) {
                                                     Text(onlineTestResult!!, fontSize = 12.sp, color = currentTheme.text)
