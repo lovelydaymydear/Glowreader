@@ -5,10 +5,12 @@ import android.media.MediaPlayer
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -107,7 +109,7 @@ class VoiceEngineManager(private val context: Context) {
                     val expectedDurationMs = ((seg.estimatedEndMs - seg.estimatedStartMs) / speechRate.coerceAtLeast(0.5f))
                         .toLong()
                         .coerceAtLeast(500L)
-                    val elapsedMs = (android.os.SystemClock.elapsedRealtime() - segmentStartElapsedMs).coerceAtLeast(0L)
+                    val elapsedMs = (SystemClock.elapsedRealtime() - segmentStartElapsedMs).coerceAtLeast(0L)
                     val frac = (elapsedMs.toFloat() / expectedDurationMs.toFloat()).coerceIn(0f, 0.99f)
                     onWordRangeCallback?.invoke(estimateWordRangeInSegment(seg, frac))
                 }
@@ -120,7 +122,7 @@ class VoiceEngineManager(private val context: Context) {
         override fun onStart(utteranceId: String?) {
             mainHandler.post {
                 if (!isPlayingInternal) return@post
-                segmentStartElapsedMs = android.os.SystemClock.elapsedRealtime()
+                segmentStartElapsedMs = SystemClock.elapsedRealtime()
                 onPlaybackStateCallback?.invoke(true)
             }
         }
@@ -290,7 +292,7 @@ class VoiceEngineManager(private val context: Context) {
             return
         }
         currentSegmentIndex = index
-        segmentStartElapsedMs = android.os.SystemClock.elapsedRealtime()
+        segmentStartElapsedMs = SystemClock.elapsedRealtime()
         val seg = activeSegments[index]
         onSentenceRangeCallback?.invoke(seg.range)
         onWordRangeCallback?.invoke(estimateWordRangeInSegment(seg, 0f))
@@ -352,7 +354,7 @@ class VoiceEngineManager(private val context: Context) {
             }
             var waited = 0
             while (!isTtsInitialized && waited < 5000) {
-                kotlinx.coroutines.delay(100)
+                delay(100)
                 waited += 100
             }
         }
@@ -367,12 +369,12 @@ class VoiceEngineManager(private val context: Context) {
         val segments = buildSentenceSegments(text)
         val sampleText = text.take(3500)
 
-        fun trySynthesizeToTarget(targetFile: File): Boolean = runCatching {
-            if (targetFile.exists()) targetFile.delete()
-            targetFile.parentFile?.mkdirs()
-            false
-        }.let {
-            suspendCoroutine<Boolean> { cont ->
+        suspend fun trySynthesizeToTarget(targetFile: File): Boolean {
+            runCatching {
+                if (targetFile.exists()) targetFile.delete()
+                targetFile.parentFile?.mkdirs()
+            }
+            return suspendCoroutine { cont ->
                 mainHandler.post {
                     applyVoiceAndParams()
                     val utteranceId = "synth_${targetFile.name}_${System.nanoTime()}"
