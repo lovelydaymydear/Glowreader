@@ -886,4 +886,285 @@ class MainActivity : ComponentActivity() {
                                                     Row(
                                                         modifier = Modifier
                                                             .fillMaxWidth()
-                                                            .padding(14.dp
+                                                            .padding(14.dp),
+                                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Column(modifier = Modifier.weight(1f)) {
+                                                            Text(book.title, fontWeight = FontWeight.Bold, color = currentTheme.text)
+                                                            Text("Formato: ${book.format}", fontSize = 12.sp, color = currentTheme.text.copy(alpha = 0.7f))
+                                                        }
+                                                        IconButton(onClick = {
+                                                            LibraryManager.deleteBook(context, book.id)
+                                                            savedBooks = LibraryManager.loadLibrary(context)
+                                                        }) {
+                                                            Icon(Icons.Rounded.Delete, contentDescription = "Remover", tint = currentTheme.text)
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            2 -> {
+                                LazyColumn(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(currentTheme.bg)
+                                        .padding(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    item {
+                                        Text("Caderno", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = currentTheme.text)
+                                    }
+                                    if (annotations.isEmpty()) {
+                                        item {
+                                            Text(
+                                                text = "Ainda não tens notas ou destaques guardados.",
+                                                color = currentTheme.text.copy(alpha = 0.75f),
+                                                modifier = Modifier.padding(top = 24.dp)
+                                            )
+                                        }
+                                    } else {
+                                        items(annotations, key = { it.id }) { ann ->
+                                            Card(
+                                                colors = CardDefaults.cardColors(containerColor = currentTheme.barBg),
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(14.dp),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.Top
+                                                ) {
+                                                    Column(modifier = Modifier.weight(1f)) {
+                                                        Text(ann.bookTitle, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = currentTheme.text)
+                                                        if (ann.selectedText.isNotBlank()) {
+                                                            Text(ann.selectedText, fontSize = 13.sp, color = currentTheme.text.copy(alpha = 0.85f))
+                                                        }
+                                                        if (ann.note.isNotBlank()) {
+                                                            Text("Nota: ${ann.note}", fontSize = 12.sp, color = Color(0xFF4F46E5))
+                                                        }
+                                                    }
+                                                    IconButton(onClick = {
+                                                        annotations = annotations.filterNot { it.id == ann.id }
+                                                        ReaderStorage.saveAnnotations(context, annotations)
+                                                    }) {
+                                                        Icon(Icons.Rounded.Delete, contentDescription = "Apagar nota", tint = currentTheme.text)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            else -> {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(currentTheme.bg)
+                                        .padding(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                                ) {
+                                    Text("Definições", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = currentTheme.text)
+                                    Text("Tema da leitura", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        ReaderTheme.entries.forEach { themeOption ->
+                                            FilterChip(
+                                                selected = currentTheme == themeOption,
+                                                onClick = { currentTheme = themeOption },
+                                                label = { Text(themeOption.label) }
+                                            )
+                                        }
+                                    }
+                                    Text("Fornecedor de dicionário/tradutor", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
+                                    listOf("Google Tradutor", "Priberam / Dicio", "Linguee / DeepL").forEach { provider ->
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            RadioButton(
+                                                selected = dictionaryProvider == provider,
+                                                onClick = { dictionaryProvider = provider }
+                                            )
+                                            Text(provider, color = currentTheme.text)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+            Surface(modifier = Modifier.fillMaxSize(), color = currentTheme.bg) {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 22.dp)
+                            .verticalScroll(scrollState)
+                            .padding(top = 16.dp, bottom = 135.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = currentBook.title,
+                                    fontSize = 17.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    color = currentTheme.text
+                                )
+                                Text(
+                                    text = activeChapter.title,
+                                    fontSize = 12.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    color = currentTheme.text.copy(alpha = 0.65f)
+                                )
+                            }
+                            Row {
+                                IconButton(onClick = { showTocSheet = true }, modifier = Modifier.size(36.dp)) {
+                                    Icon(Icons.Rounded.FormatListBulleted, "Índice", tint = currentTheme.text)
+                                }
+                                IconButton(onClick = {
+                                    val bm = StudyAnnotation(
+                                        bookTitle = currentBook.title,
+                                        chapterIndex = currentChapterIndex,
+                                        chapterTitle = activeChapter.title,
+                                        selectedText = textContent.take(80) + "...",
+                                        isBookmark = true
+                                    )
+                                    annotations = listOf(bm) + annotations
+                                    ReaderStorage.saveAnnotations(context, annotations)
+                                }, modifier = Modifier.size(36.dp)) {
+                                    Icon(Icons.Rounded.BookmarkAdd, "Marcador", tint = currentTheme.text)
+                                }
+                                IconButton(onClick = { showNotebookSheet = true }, modifier = Modifier.size(36.dp)) {
+                                    Icon(Icons.Rounded.Book, "Caderno de Notas", tint = currentTheme.text)
+                                }
+                                IconButton(onClick = { showTypeSheet = true }, modifier = Modifier.size(36.dp)) {
+                                    Icon(Icons.Rounded.FormatSize, "Fontes e Alinhamento", tint = currentTheme.text)
+                                }
+                                IconButton(onClick = {
+                                    currentTheme = when (currentTheme) {
+                                        ReaderTheme.LIGHT -> ReaderTheme.SEPIA
+                                        ReaderTheme.SEPIA -> ReaderTheme.DARK
+                                        ReaderTheme.DARK -> ReaderTheme.LIGHT
+                                    }
+                                }, modifier = Modifier.size(36.dp)) {
+                                    Icon(Icons.Rounded.Palette, "Tema", tint = currentTheme.text)
+                                }
+                                IconButton(onClick = { showSettingsSheet = true }, modifier = Modifier.size(36.dp)) {
+                                    Icon(Icons.Rounded.Settings, "Definições", tint = currentTheme.text)
+                                }
+                                IconButton(onClick = {
+                                    filePicker.launch(arrayOf("application/epub+zip", "application/pdf", "text/plain"))
+                                }, modifier = Modifier.size(36.dp)) {
+                                    Icon(Icons.Rounded.FolderOpen, "Abrir Livro", tint = currentTheme.text)
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(18.dp))
+
+                        if (isLoadingBook) {
+                            Box(modifier = Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(color = Color(0xFF4F46E5))
+                            }
+                        } else {
+                            val bookAnnotations = annotations.filter { it.bookTitle == currentBook.title && it.chapterIndex == currentChapterIndex && !it.isBookmark }
+
+                            val annotatedText = buildAnnotatedString {
+                                append(textContent)
+                                bookAnnotations.forEach { ann ->
+                                    if (ann.selectedText.isNotBlank()) {
+                                        val idx = textContent.indexOf(ann.selectedText)
+                                        if (idx >= 0) {
+                                            val c = try { HighlightColor.valueOf(ann.colorName).toColor() } catch (_: Exception) { HighlightColor.YELLOW.toColor() }
+                                            addStyle(
+                                                SpanStyle(
+                                                    background = c.copy(alpha = 0.55f),
+                                                    textDecoration = if (ann.isUnderline) TextDecoration.Underline else TextDecoration.None
+                                                ),
+                                                idx,
+                                                idx + ann.selectedText.length
+                                            )
+                                        }
+                                    }
+                                }
+                                if (highlightStart >= 0 && highlightEnd <= textContent.length && highlightStart < highlightEnd) {
+                                    addStyle(
+                                        SpanStyle(
+                                            background = currentTheme.highlightBg,
+                                            color = currentTheme.highlightText,
+                                            fontWeight = FontWeight.Bold
+                                        ),
+                                        highlightStart,
+                                        highlightEnd
+                                    )
+                                }
+                            }
+
+                            SelectionContainer {
+                                Text(
+                                    text = annotatedText,
+                                    fontSize = fontSize.sp,
+                                    lineHeight = (fontSize * 1.58f).sp,
+                                    fontFamily = currentFont.family,
+                                    textAlign = currentAlign.align,
+                                    color = currentTheme.text
+                                )
+                            }
+                        }
+                    }
+
+                    Surface(
+                        modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp).fillMaxWidth(),
+                        shape = RoundedCornerShape(32.dp),
+                        color = currentTheme.barBg,
+                        shadowElevation = 8.dp
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TextButton(onClick = {
+                                speechRate = when (speechRate) {
+                                    1.0f -> 1.25f
+                                    1.25f -> 1.5f
+                                    1.5f -> 2.0f
+                                    else -> 1.0f
+                                }
+                                if (isPlaying) { stopAudio(); togglePlay() }
+                            }) {
+                                Text("${speechRate}x", fontWeight = FontWeight.Bold, color = currentTheme.text)
+                            }
+
+                            IconButton(onClick = {
+                                draftSelection = clipboard.getText()?.text ?: ""
+                                draftNote = ""
+                                showNoteDialog = true
+                            }) {
+                                Icon(Icons.Rounded.EditNote, "Anotar ou Traduzir Seleção", tint = currentTheme.text)
+                            }
+
+                            IconButton(
+                                onClick = {
+                                    if (currentChapterIndex > 0) {
+                                        stopAudio()
+                                        currentChapterIndex--
+                                        scope.launch { scrollState.scrollTo(0) }
+                                    }
+                                },
+                                enabled = currentChapterIndex > 0
+                            ) {
