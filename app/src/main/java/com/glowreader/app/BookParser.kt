@@ -90,7 +90,7 @@ object BookParser {
         return raw.lines()
             .map { it.trim() }
             .filter { line ->
-                line.isNotEmpty() && !line.matches(Regex("^\\d+$")) && !line.matches(Regex("^(Pág\\.|Página|Page)\\s*\\d+.*$", RegexOption.IGNORE_CASE))
+                line.isNotEmpty() && !line.matches(Regex("^\\d+$")) && !line.matches(Regex("^(Pág\\.\vert{}Página\vert{}Page)\\s*\\d+.*$", RegexOption.IGNORE_CASE))
             }
             .joinToString("\n")
     }
@@ -159,6 +159,7 @@ object BookParser {
         val manifestMap = mutableMapOf<String, String>()
         val tocTitles = mutableMapOf<String, String>()
         var coverBitmap: Bitmap? = null
+        var fallbackCoverBitmap: Bitmap? = null
 
         context.contentResolver.openInputStream(uri)?.use { stream ->
             ZipInputStream(stream).use { zip ->
@@ -167,16 +168,22 @@ object BookParser {
                     val entryName = entry.name
                     val lower = entryName.lowercase()
                     val isTextFile = lower.endsWith(".opf") || lower.endsWith(".ncx") ||
-                            lower.endsWith(".html") || lower.endsWith(".xhtml") || lower.endsWith(".htm")
-                    val isCoverImage = coverBitmap == null &&
-                            (lower.contains("cover") || lower.contains("capa")) &&
-                            (lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png"))
+                        lower.endsWith(".html") || lower.endsWith(".xhtml") || lower.endsWith(".htm")
+                    val isImageFile = lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png")
+                    val isExplicitCover = lower.contains("cover") || lower.contains("capa")
 
                     if (!entry.isDirectory) {
-                        if (isCoverImage) {
+                        if (isImageFile && (coverBitmap == null || fallbackCoverBitmap == null)) {
                             try {
                                 val imgBytes = zip.readBytes()
-                                coverBitmap = BitmapFactory.decodeByteArray(imgBytes, 0, imgBytes.size)
+                                val decoded = BitmapFactory.decodeByteArray(imgBytes, 0, imgBytes.size)
+                                if (decoded != null && decoded.width >= 32 && decoded.height >= 32) {
+                                    if (isExplicitCover && coverBitmap == null) {
+                                        coverBitmap = decoded
+                                    } else if (fallbackCoverBitmap == null) {
+                                        fallbackCoverBitmap = decoded
+                                    }
+                                }
                             } catch (_: Exception) {}
                         } else if (isTextFile) {
                             val contentStr = zip.bufferedReader(Charsets.UTF_8).readText()
@@ -228,7 +235,11 @@ object BookParser {
             chapters.add(BookChapter("Início", "Não foi possível extrair capítulos deste EPUB."))
         }
 
-        return ParsedBook(title.substringBeforeLast("."), chapters, coverBitmap)
+        return ParsedBook(
+            title = title.substringBeforeLast("."),
+            chapters = chapters,
+            coverBitmap = coverBitmap ?: fallbackCoverBitmap
+        )
     }
 
     private fun parseOpf(xml: String, manifest: MutableMap<String, String>, spine: MutableList<String>) {
