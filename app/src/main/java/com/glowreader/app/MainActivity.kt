@@ -82,6 +82,12 @@ class MainActivity : ComponentActivity() {
             var currentChapterIndex by remember { mutableIntStateOf(0) }
             var isImporting by remember { mutableStateOf(false) }
 
+            // Estado para importar página/artigo da web por URL
+            var showWebImportDialog by remember { mutableStateOf(false) }
+            var webUrlInput by remember { mutableStateOf("") }
+            var webImportError by remember { mutableStateOf<String?>(null) }
+            var webImportStatus by remember { mutableStateOf<String?>(null) }
+
             var annotations by remember { mutableStateOf(ReaderStorage.loadAnnotations(context)) }
             var selectedLocale by remember { mutableStateOf(Locale("pt", "PT")) }
             var availableVoices by remember { mutableStateOf<List<Voice>>(emptyList()) }
@@ -183,6 +189,30 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            fun triggerWebImport(rawUrl: String) {
+                webImportError = null
+                webImportStatus = "A descarregar e processar página..."
+                isImporting = true
+                scope.launch {
+                    val result = WebImporter.importFromUrl(rawUrl)
+                    if (result.success && result.book != null && result.book.chapters.isNotEmpty()) {
+                        withContext(Dispatchers.IO) {
+                            LibraryManager.saveBookToLibrary(context, result.book, "WEB")
+                        }
+                        savedBooks = LibraryManager.loadLibrary(context)
+                        webImportStatus = null
+                        webImportError = null
+                        webUrlInput = ""
+                        showWebImportDialog = false
+                        currentTab = 1
+                    } else {
+                        webImportStatus = null
+                        webImportError = result.errorMessage ?: "Não foi possível importar a página."
+                    }
+                    isImporting = false
+                }
+            }
+
             val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
                 uri?.let {
                     isImporting = true
@@ -206,6 +236,74 @@ class MainActivity : ComponentActivity() {
                         isImporting = false
                     }
                 }
+            }
+
+            if (showWebImportDialog) {
+                AlertDialog(
+                    onDismissRequest = {
+                        if (!isImporting) {
+                            showWebImportDialog = false
+                            webImportError = null
+                            webImportStatus = null
+                        }
+                    },
+                    title = { Text("Importar página da web") },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text(
+                                text = "Cola o link de um artigo, capítulo ou página web em português para extrair o texto e guardar na biblioteca.",
+                                fontSize = 13.sp
+                            )
+                            OutlinedTextField(
+                                value = webUrlInput,
+                                onValueChange = {
+                                    webUrlInput = it
+                                    webImportError = null
+                                },
+                                label = { Text("https://exemplo.com/artigo") },
+                                singleLine = true,
+                                enabled = !isImporting,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            if (webImportStatus != null) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                    Text(webImportStatus!!, fontSize = 12.sp)
+                                }
+                            }
+                            if (webImportError != null) {
+                                Text(
+                                    text = webImportError!!,
+                                    color = MaterialTheme.colorScheme.error,
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = { triggerWebImport(webUrlInput) },
+                            enabled = !isImporting && webUrlInput.isNotBlank()
+                        ) {
+                            Text("Importar link")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = {
+                                showWebImportDialog = false
+                                webImportError = null
+                                webImportStatus = null
+                            },
+                            enabled = !isImporting
+                        ) {
+                            Text("Cancelar")
+                        }
+                    }
+                )
             }
 
             if (internalLookupUrl != null && internalLookupTitle != null) {
@@ -729,7 +827,7 @@ class MainActivity : ComponentActivity() {
                                 onOpenNotebook = { currentTab = 2 },
                                 onOpenSettings = { currentTab = 3 },
                                 onImportBook = {
-                                    filePicker.launch(arrayOf("application/epub+zip", "application/pdf", "text/plain"))
+                                    showWebImportDialog = true
                                 }
                             )
 
@@ -753,19 +851,26 @@ class MainActivity : ComponentActivity() {
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
                                                 Text("Biblioteca", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = currentTheme.text)
-                                                Button(onClick = {
-                                                    filePicker.launch(arrayOf("application/epub+zip", "application/pdf", "text/plain"))
-                                                }) {
-                                                    Icon(Icons.Rounded.Add, contentDescription = null)
-                                                    Spacer(modifier = Modifier.width(4.dp))
-                                                    Text("Importar")
+                                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                    FilledTonalButton(onClick = { showWebImportDialog = true }) {
+                                                        Icon(Icons.Rounded.Language, contentDescription = null)
+                                                        Spacer(modifier = Modifier.width(4.dp))
+                                                        Text("URL")
+                                                    }
+                                                    Button(onClick = {
+                                                        filePicker.launch(arrayOf("application/epub+zip", "application/pdf", "text/plain"))
+                                                    }) {
+                                                        Icon(Icons.Rounded.Add, contentDescription = null)
+                                                        Spacer(modifier = Modifier.width(4.dp))
+                                                        Text("Ficheiro")
+                                                    }
                                                 }
                                             }
                                         }
                                         if (savedBooks.isEmpty()) {
                                             item {
                                                 Text(
-                                                    text = "A tua biblioteca ainda está vazia. Toca em Importar para adicionar um livro.",
+                                                    text = "A tua biblioteca ainda está vazia. Toca em Ficheiro ou URL para adicionar conteúdo.",
                                                     color = currentTheme.text.copy(alpha = 0.75f),
                                                     modifier = Modifier.padding(top = 24.dp)
                                                 )
@@ -781,117 +886,4 @@ class MainActivity : ComponentActivity() {
                                                     Row(
                                                         modifier = Modifier
                                                             .fillMaxWidth()
-                                                            .padding(14.dp),
-                                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                                        verticalAlignment = Alignment.CenterVertically
-                                                    ) {
-                                                        Column(modifier = Modifier.weight(1f)) {
-                                                            Text(book.title, fontWeight = FontWeight.Bold, color = currentTheme.text)
-                                                            Text("Formato: ${book.format}", fontSize = 12.sp, color = currentTheme.text.copy(alpha = 0.7f))
-                                                        }
-                                                        IconButton(onClick = {
-                                                            LibraryManager.deleteBook(context, book.id)
-                                                            savedBooks = LibraryManager.loadLibrary(context)
-                                                        }) {
-                                                            Icon(Icons.Rounded.Delete, contentDescription = "Remover", tint = currentTheme.text)
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            2 -> {
-                                LazyColumn(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .background(currentTheme.bg)
-                                        .padding(16.dp),
-                                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    item {
-                                        Text("Caderno", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = currentTheme.text)
-                                    }
-                                    if (annotations.isEmpty()) {
-                                        item {
-                                            Text(
-                                                text = "Ainda não tens notas ou destaques guardados.",
-                                                color = currentTheme.text.copy(alpha = 0.75f),
-                                                modifier = Modifier.padding(top = 24.dp)
-                                            )
-                                        }
-                                    } else {
-                                        items(annotations, key = { it.id }) { ann ->
-                                            Card(
-                                                colors = CardDefaults.cardColors(containerColor = currentTheme.barBg),
-                                                modifier = Modifier.fillMaxWidth()
-                                            ) {
-                                                Row(
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .padding(14.dp),
-                                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                                    verticalAlignment = Alignment.Top
-                                                ) {
-                                                    Column(modifier = Modifier.weight(1f)) {
-                                                        Text(ann.bookTitle, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = currentTheme.text)
-                                                        if (ann.selectedText.isNotBlank()) {
-                                                            Text(ann.selectedText, fontSize = 13.sp, color = currentTheme.text.copy(alpha = 0.85f))
-                                                        }
-                                                        if (ann.note.isNotBlank()) {
-                                                            Text("Nota: ${ann.note}", fontSize = 12.sp, color = Color(0xFF4F46E5))
-                                                        }
-                                                    }
-                                                    IconButton(onClick = {
-                                                        annotations = annotations.filterNot { it.id == ann.id }
-                                                        ReaderStorage.saveAnnotations(context, annotations)
-                                                    }) {
-                                                        Icon(Icons.Rounded.Delete, contentDescription = "Apagar nota", tint = currentTheme.text)
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            else -> {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .background(currentTheme.bg)
-                                        .padding(16.dp),
-                                    verticalArrangement = Arrangement.spacedBy(14.dp)
-                                ) {
-                                    Text("Definições", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = currentTheme.text)
-                                    Text("Tema da leitura", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        ReaderTheme.entries.forEach { themeOption ->
-                                            FilterChip(
-                                                selected = currentTheme == themeOption,
-                                                onClick = { currentTheme = themeOption },
-                                                label = { Text(themeOption.label) }
-                                            )
-                                        }
-                                    }
-                                    Text("Fornecedor de dicionário/tradutor", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
-                                    listOf("Google Tradutor", "Priberam / Dicio", "Linguee / DeepL").forEach { provider ->
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            RadioButton(
-                                                selected = dictionaryProvider == provider,
-                                                onClick = { dictionaryProvider = provider }
-                                            )
-                                            Text(provider, color = currentTheme.text)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
+                                                            .padding(14.dp
