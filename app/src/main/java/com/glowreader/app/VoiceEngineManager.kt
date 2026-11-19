@@ -10,9 +10,15 @@ import android.os.SystemClock
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -21,6 +27,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import java.util.zip.ZipInputStream
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
@@ -61,7 +68,7 @@ data class DownloadableVoiceCatalogItem(
     val id: String,
     val title: String,
     val subtitle: String,
-    val languageTag: String, // "pt", "en", "multi"
+    val languageTag: String,
     val approxSizeLabel: String,
     val engineLabel: String,
     val downloadUrl: String,
@@ -75,7 +82,7 @@ data class EdgeVoiceItem(
     val shortName: String,
     val displayName: String,
     val localeCode: String,
-    val languageFilter: String, // "pt", "en", "multi", "other"
+    val languageFilter: String,
     val gender: String,
     val isMultilingual: Boolean
 )
@@ -99,19 +106,31 @@ data class SavedAudioTrack(
     val segments: List<SentenceSegment>
 )
 
+private enum class BufferSlotState {
+    PENDING,
+    LOADING,
+    READY,
+    FAILED
+}
+
+private data class BufferedSegmentEntry(
+    val segmentIndex: Int,
+    val state: BufferSlotState,
+    val audioFile: File? = null
+)
+
 class VoiceEngineManager(private val context: Context) {
 
     companion object {
         const val DEFAULT_ONLINE_TTS_ENDPOINT = "https://api.streamelements.com/kappa/v2/speech"
+        const val BUFFER_LOOKAHEAD_SEGMENTS = 3
 
         val EDGE_VOICES_CATALOG = listOf(
-            // Português
             EdgeVoiceItem("pt-PT-RaquelNeural", "Raquel · pt-PT (Feminina)", "pt-PT", "pt", "Feminina", false),
             EdgeVoiceItem("pt-PT-DuarteNeural", "Duarte · pt-PT (Masculina)", "pt-PT", "pt", "Masculina", false),
             EdgeVoiceItem("pt-BR-FranciscaNeural", "Francisca · pt-BR (Feminina)", "pt-BR", "pt", "Feminina", false),
             EdgeVoiceItem("pt-BR-AntonioNeural", "Antônio · pt-BR (Masculina)", "pt-BR", "pt", "Masculina", false),
             EdgeVoiceItem("pt-BR-ThalitaMultilingualNeural", "Thalita Multilingual · pt-BR", "pt-BR", "multi", "Feminina", true),
-            // Multilingual (Edge Neural)
             EdgeVoiceItem("en-US-AvaMultilingualNeural", "Ava Multilingual · en-US", "en-US", "multi", "Feminina", true),
             EdgeVoiceItem("en-US-AndrewMultilingualNeural", "Andrew Multilingual · en-US", "en-US", "multi", "Masculina", true),
             EdgeVoiceItem("en-US-EmmaMultilingualNeural", "Emma Multilingual · en-US", "en-US", "multi", "Feminina", true),
@@ -123,13 +142,11 @@ class VoiceEngineManager(private val context: Context) {
             EdgeVoiceItem("es-ES-ArabellaMultilingualNeural", "Arabella Multilingual · es-ES", "es-ES", "multi", "Feminina", true),
             EdgeVoiceItem("it-IT-GiuseppeMultilingualNeural", "Giuseppe Multilingual · it-IT", "it-IT", "multi", "Masculina", true),
             EdgeVoiceItem("ko-KR-HyunsuMultilingualNeural", "Hyunsu Multilingual · ko-KR", "ko-KR", "multi", "Masculina", true),
-            // English
             EdgeVoiceItem("en-US-JennyNeural", "Jenny · en-US", "en-US", "en", "Feminina", false),
             EdgeVoiceItem("en-US-GuyNeural", "Guy · en-US", "en-US", "en", "Masculina", false),
             EdgeVoiceItem("en-US-AriaNeural", "Aria · en-US", "en-US", "en", "Feminina", false),
             EdgeVoiceItem("en-GB-SoniaNeural", "Sonia · en-GB", "en-GB", "en", "Feminina", false),
             EdgeVoiceItem("en-GB-RyanNeural", "Ryan · en-GB", "en-GB", "en", "Masculina", false),
-            // Español / Français
             EdgeVoiceItem("es-ES-ElviraNeural", "Elvira · es-ES", "es-ES", "other", "Feminina", false),
             EdgeVoiceItem("es-MX-DaliaNeural", "Dalia · es-MX", "es-MX", "other", "Feminina", false),
             EdgeVoiceItem("fr-FR-DeniseNeural", "Denise · fr-FR", "fr-FR", "other", "Feminina", false)
@@ -242,6 +259,10 @@ class VoiceEngineManager(private val context: Context) {
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val engineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var prefetchJob: Job? = null
+    private val segmentBuffer = ConcurrentHashMap<Int, BufferedSegmentEntry>()
+
     private var androidTts: TextToSpeech? = null
     private var mediaPlayer: MediaPlayer? = null
     private var isTtsInitialized = false
@@ -484,6 +505,122 @@ class VoiceEngineManager(private val context: Context) {
         return if (start < end) start until end else null
     }
 
+    private fun clearSegmentBuffer() {
+        segmentBuffer.values.forEach { entry ->
+            entry.audioFile?.let { file ->
+                if (file.exists() && file.name.startsWith("tts_buf_")) {
+                    runCatching { file.delete() }
+                }
+            }
+        }
+        segmentBuffer.clear()
+    }
+
+    private fun scheduleBufferPrefetch(fromIndex: Int) {
+        if (currentProvider != VoiceProviderType.EDGE_ONLINE) return
+        val segmentsSnapshot = activeSegments
+        if (segmentsSnapshot.isEmpty()) return
+
+        prefetchJob?.cancel()
+        prefetchJob = engineScope.launch {
+            val endExclusive = (fromIndex + 1 + BUFFER_LOOKAHEAD_SEGMENTS).coerceAtMost(segmentsSnapshot.size)
+            for (idx in fromIndex until endExclusive) {
+                if (!isPlayingInternal) break
+                val existing = segmentBuffer[idx]
+                if (existing != null && (existing.state == BufferSlotState.READY || existing.state == BufferSlotState.LOADING)) {
+                    continue
+                }
+                val seg = segmentsSnapshot.getOrNull(idx) ?: continue
+                segmentBuffer[idx] = BufferedSegmentEntry(idx, BufferSlotState.LOADING)
+                val file = synthesizeOnlineSegmentToCache(idx, seg.text)
+                if (file != null && file.exists() && file.length() > 512L) {
+                    segmentBuffer[idx] = BufferedSegmentEntry(idx, BufferSlotState.READY, file)
+                } else {
+                    segmentBuffer[idx] = BufferedSegmentEntry(idx, BufferSlotState.FAILED)
+                }
+            }
+        }
+    }
+
+    private suspend fun synthesizeOnlineSegmentToCache(segmentIndex: Int, text: String): File? = withContext(Dispatchers.IO) {
+        val cleanText = text.trim().take(400)
+        if (cleanText.isEmpty()) return@withContext null
+        val cacheDir = File(context.cacheDir, "tts_buffer").apply { if (!exists()) mkdirs() }
+        val outFile = File(cacheDir, "tts_buf_${segmentIndex}_${selectedEdgeVoice.hashCode()}.mp3")
+        if (outFile.exists() && outFile.length() > 512L) return@withContext outFile
+
+        val voiceParam = URLEncoder.encode(selectedEdgeVoice, "UTF-8")
+        val textParam = URLEncoder.encode(cleanText, "UTF-8")
+        val urls = listOf(
+            "https://api.streamelements.com/kappa/v2/speech?voice=$voiceParam&text=$textParam",
+            "https://translate.google.com/translate_tts?ie=UTF-8&tl=${selectedLocale.language.ifBlank { "pt" }}&client=tw-ob&q=$textParam"
+        )
+
+        for (candidate in urls) {
+            var conn: HttpURLConnection? = null
+            try {
+                conn = (URL(candidate).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    connectTimeout = 5000
+                    readTimeout = 8000
+                    setRequestProperty("User-Agent", "Mozilla/5.0 (Android; GlowReader)")
+                }
+                if (conn.responseCode in 200..299) {
+                    val tempFile = File(cacheDir, "${outFile.name}.part")
+                    conn.inputStream.use { input ->
+                        FileOutputStream(tempFile).use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    if (tempFile.exists() && tempFile.length() > 512L) {
+                        if (outFile.exists()) outFile.delete()
+                        tempFile.renameTo(outFile)
+                        return@withContext outFile
+                    }
+                    if (tempFile.exists()) tempFile.delete()
+                }
+            } catch (_: Exception) {
+            } finally {
+                conn?.disconnect()
+            }
+        }
+        null
+    }
+
+    private fun playBufferedAudioFile(index: Int, seg: SentenceSegment, file: File) {
+        try {
+            mediaPlayer?.stop()
+            mediaPlayer?.release()
+        } catch (_: Exception) {
+        }
+        mediaPlayer = null
+
+        val mp = MediaPlayer().apply {
+            setDataSource(file.absolutePath)
+            prepare()
+            start()
+        }
+        mediaPlayer = mp
+        segmentStartElapsedMs = SystemClock.elapsedRealtime()
+        onPlaybackStateCallback?.invoke(true)
+        onSentenceRangeCallback?.invoke(seg.range)
+        onWordRangeCallback?.invoke(estimateWordRangeInSegment(seg, 0f))
+        scheduleBufferPrefetch(index + 1)
+
+        mp.setOnCompletionListener {
+            try {
+                mp.release()
+            } catch (_: Exception) {
+            }
+            if (mediaPlayer === mp) {
+                mediaPlayer = null
+            }
+            if (isPlayingInternal) {
+                playSentenceAt(index + 1)
+            }
+        }
+    }
+
     fun startReadingText(
         text: String,
         onSentenceRange: (IntRange?) -> Unit,
@@ -526,7 +663,9 @@ class VoiceEngineManager(private val context: Context) {
         if (!isPlayingInternal) return
         if (index >= activeSegments.size) {
             isPlayingInternal = false
+            prefetchJob?.cancel()
             mainHandler.removeCallbacks(wordProgressRunnable)
+            clearSegmentBuffer()
             onSentenceRangeCallback?.invoke(null)
             onWordRangeCallback?.invoke(null)
             onPlaybackStateCallback?.invoke(false)
@@ -539,6 +678,40 @@ class VoiceEngineManager(private val context: Context) {
         onSentenceRangeCallback?.invoke(seg.range)
         onWordRangeCallback?.invoke(estimateWordRangeInSegment(seg, 0f))
 
+        if (currentProvider == VoiceProviderType.EDGE_ONLINE) {
+            scheduleBufferPrefetch(index)
+            val cached = segmentBuffer[index]
+            if (cached?.state == BufferSlotState.READY && cached.audioFile?.exists() == true) {
+                playBufferedAudioFile(index, seg, cached.audioFile)
+                return
+            }
+            engineScope.launch {
+                val preparedFile = withTimeoutOrNull(2200L) {
+                    val existing = segmentBuffer[index]
+                    if (existing?.state == BufferSlotState.READY && existing.audioFile?.exists() == true) {
+                        existing.audioFile
+                    } else {
+                        synthesizeOnlineSegmentToCache(index, seg.text)
+                    }
+                }
+                withContext(Dispatchers.Main) {
+                    if (!isPlayingInternal || currentSegmentIndex != index) return@withContext
+                    if (preparedFile != null && preparedFile.exists() && preparedFile.length() > 512L) {
+                        segmentBuffer[index] = BufferedSegmentEntry(index, BufferSlotState.READY, preparedFile)
+                        playBufferedAudioFile(index, seg, preparedFile)
+                    } else {
+                        speakWithSystemTtsFallback(index, seg)
+                    }
+                }
+            }
+            return
+        }
+
+        speakWithSystemTtsFallback(index, seg)
+    }
+
+    private fun speakWithSystemTtsFallback(index: Int, seg: SentenceSegment) {
+        scheduleBufferPrefetch(index + 1)
         applyVoiceAndParams()
         val utteranceId = "glow_seg_$index"
         val params = Bundle().apply {
@@ -549,7 +722,9 @@ class VoiceEngineManager(private val context: Context) {
 
     fun stopPlayback() {
         isPlayingInternal = false
+        prefetchJob?.cancel()
         mainHandler.removeCallbacks(wordProgressRunnable)
+        clearSegmentBuffer()
         try {
             androidTts?.stop()
         } catch (_: Exception) {
@@ -567,6 +742,7 @@ class VoiceEngineManager(private val context: Context) {
 
     fun release() {
         stopPlayback()
+        engineScope.cancel()
         try {
             androidTts?.shutdown()
         } catch (_: Exception) {
@@ -799,22 +975,6 @@ class VoiceEngineManager(private val context: Context) {
                 }
             }
         })
-    }
-
-    fun checkLocalPiperModels(): List<File> {
-        val piperDir = File(context.filesDir, "piper_models")
-        if (!piperDir.exists()) return emptyList()
-        return piperDir.listFiles { f -> f.isFile && f.extension.equals("onnx", ignoreCase = true) }
-            ?.toList()
-            ?: emptyList()
-    }
-
-    fun listDownloadedNeuralItems(): List<File> {
-        val dirs = listOf("piper_models", "supertonic_models", "kokoro_models", "pocket_tts_models", "cloned_voices")
-        return dirs.flatMap { sub ->
-            val d = File(context.filesDir, sub)
-            if (!d.exists()) emptyList() else d.listFiles()?.filter { it.isFile }?.toList() ?: emptyList()
-        }
     }
 
     suspend fun downloadFileFromUrl(
