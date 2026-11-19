@@ -18,6 +18,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -64,6 +65,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import java.util.Locale
 
 private val ReaderTealAccent = Color(0xFF55A89F)
@@ -100,6 +103,53 @@ private fun formatCleanBookTitle(rawTitle: String): String {
         .replace(Regex("\\s+"), " ")
         .trim()
         .ifBlank { "Livro" }
+}
+
+private fun buildInAppToolUrl(
+    toolType: String,
+    query: String,
+    targetLang: String,
+    customAiUrl: String
+): Pair<String, String> {
+    val cleanQuery = query.trim()
+    val encoded = URLEncoder.encode(cleanQuery, StandardCharsets.UTF_8.toString())
+    val lang = targetLang.lowercase(Locale.ROOT).ifBlank { "pt" }
+
+    return when (toolType) {
+        "TRANSLATE" -> {
+            val url = if (cleanQuery.isEmpty()) {
+                "https://translate.google.com/?sl=auto&tl=$lang&op=translate"
+            } else {
+                "https://translate.google.com/?sl=auto&tl=$lang&text=$encoded&op=translate"
+            }
+            "Tradutor na App" to url
+        }
+        "DICTIONARY" -> {
+            val url = if (cleanQuery.isEmpty()) {
+                "https://dicio.com.br/"
+            } else {
+                "https://dicio.com.br/$encoded/"
+            }
+            "Dicionário na App" to url
+        }
+        "AI" -> {
+            val baseAi = customAiUrl.trim().ifBlank { "https://gemini.google.com/app" }
+            val url = if (cleanQuery.isEmpty()) {
+                baseAi
+            } else {
+                "https://www.google.com/search?q=$encoded"
+            }
+            "IA e Pesquisa na App" to url
+        }
+        else -> {
+            val url = if (cleanQuery.isEmpty()) {
+                "https://www.google.com/"
+            } else {
+                "https://www.google.com/search?q=$encoded"
+            }
+            "Pesquisa na App" to url
+        }
+    }
 }
 
 class MainActivity : ComponentActivity() {
@@ -194,7 +244,7 @@ class MainActivity : ComponentActivity() {
             var webImportStatus by remember { mutableStateOf<String?>(null) }
 
             var annotations by remember { mutableStateOf(ReaderStorage.loadAnnotations(context)) }
-            var dictionaryProvider by remember { mutableStateOf("Google Tradutor") }
+            var dictionaryProvider by remember { mutableStateOf("Dicionário / Tradutor") }
             var translationTargetLang by remember { mutableStateOf("pt") }
             var lookupQueryInput by remember { mutableStateOf("") }
             var lookupHistory by remember { mutableStateOf(StudyNotebookManager.loadLookupHistory(context)) }
@@ -297,6 +347,21 @@ class MainActivity : ComponentActivity() {
                     delay(sleepTimerMinutes * 60_000L)
                     stopAudio()
                 }
+            }
+
+            fun openToolInsideApp(toolType: String, query: String) {
+                val clean = query.trim()
+                if (clean.isNotEmpty()) {
+                    lookupHistory = StudyNotebookManager.recordLookup(context, clean, toolType)
+                }
+                val (title, url) = buildInAppToolUrl(
+                    toolType = toolType,
+                    query = clean,
+                    targetLang = translationTargetLang,
+                    customAiUrl = customAiUrl
+                )
+                internalLookupTitle = title
+                internalLookupUrl = url
             }
 
             fun openResearchTarget(target: ResearchToolTarget, query: String) {
@@ -720,7 +785,7 @@ class MainActivity : ComponentActivity() {
                     text = {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Text(
-                                text = "Abre qualquer ferramenta diretamente dentro do GlowReader sem sair da leitura:",
+                                text = "Abre qualquer consulta diretamente dentro do GlowReader sem sair da leitura:",
                                 color = currentTheme.text.copy(alpha = 0.8f),
                                 fontSize = 12.sp
                             )
@@ -731,16 +796,41 @@ class MainActivity : ComponentActivity() {
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth()
                             )
-                            ResearchToolTarget.entries.forEach { target ->
-                                OutlinedButton(
-                                    onClick = {
-                                        showResearchHubDialog = false
-                                        openResearchTarget(target, researchQueryInput)
-                                    },
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text(target.label, color = currentTheme.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                }
+                            OutlinedButton(
+                                onClick = {
+                                    showResearchHubDialog = false
+                                    openToolInsideApp("SEARCH", researchQueryInput)
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Pesquisar na App", color = currentTheme.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    showResearchHubDialog = false
+                                    openToolInsideApp("DICTIONARY", researchQueryInput)
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Dicionário na App", color = currentTheme.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    showResearchHubDialog = false
+                                    openToolInsideApp("TRANSLATE", researchQueryInput)
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Tradutor na App", color = currentTheme.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    showResearchHubDialog = false
+                                    openResearchTarget(ResearchToolTarget.AI_ASSISTANT, researchQueryInput)
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Assistente / IA na App", color = currentTheme.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                         }
                     },
@@ -1139,12 +1229,13 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(scrollState.isScrollInProgress, barsBehaviorMode) {
                     if (scrollState.isScrollInProgress && barsBehaviorMode == BarsBehaviorMode.HIDE_ON_ADVANCE) {
                         barsVisible = false
+                        showStudyBanner = false
                     }
                 }
 
                 var showTocSheet by remember { mutableStateOf(false) }
                 var showListenSheet by remember { mutableStateOf(false) }
-                var listenSheetTab by remember { mutableIntStateOf(0) } // 0 = Ouvir, 1 = Ler
+                var listenSheetTab by remember { mutableIntStateOf(0) }
                 var showTypeSheet by remember { mutableStateOf(false) }
                 var showNotebookSheet by remember { mutableStateOf(false) }
                 var showNoteDialog by remember { mutableStateOf(false) }
@@ -2368,18 +2459,20 @@ class MainActivity : ComponentActivity() {
                                             Text("Ouvir", color = Color(0xFFE3ECE7), maxLines = 1, softWrap = false)
                                         }
                                     }
-                                    OutlinedButton(onClick = { openDictionaryOrTranslate(draftSelection) }) {
+                                    OutlinedButton(onClick = { openToolInsideApp("DICTIONARY", draftSelection) }) {
+                                        Icon(Icons.Rounded.MenuBook, contentDescription = null, tint = ReaderTealAccent)
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Dicionário na App", color = Color(0xFFE3ECE7), maxLines = 1, softWrap = false)
+                                    }
+                                    OutlinedButton(onClick = { openToolInsideApp("TRANSLATE", draftSelection) }) {
                                         Icon(Icons.Rounded.Translate, contentDescription = null, tint = ReaderTealAccent)
                                         Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Dicionário / Tradutor", color = Color(0xFFE3ECE7), maxLines = 1, softWrap = false)
+                                        Text("Tradutor na App", color = Color(0xFFE3ECE7), maxLines = 1, softWrap = false)
                                     }
-                                    OutlinedButton(onClick = {
-                                        researchQueryInput = draftSelection
-                                        showResearchHubDialog = true
-                                    }) {
+                                    OutlinedButton(onClick = { openToolInsideApp("SEARCH", draftSelection) }) {
                                         Icon(Icons.Rounded.Search, contentDescription = null, tint = ReaderTealAccent)
                                         Spacer(modifier = Modifier.width(4.dp))
-                                        Text("IA / Google", color = Color(0xFFE3ECE7), maxLines = 1, softWrap = false)
+                                        Text("Pesquisar na App", color = Color(0xFFE3ECE7), maxLines = 1, softWrap = false)
                                     }
                                 }
                             }
@@ -2675,7 +2768,18 @@ class MainActivity : ComponentActivity() {
                             }
 
                             CompositionLocalProvider(LocalTextToolbar provides customTextToolbar) {
-                                SelectionContainer {
+                                SelectionContainer(
+                                    modifier = Modifier.clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null
+                                    ) {
+                                        if (barsBehaviorMode == BarsBehaviorMode.TAP_TO_TOGGLE) {
+                                            barsVisible = !barsVisible
+                                        } else if (barsBehaviorMode == BarsBehaviorMode.HIDE_ON_ADVANCE && barsVisible) {
+                                            barsVisible = false
+                                        }
+                                    }
+                                ) {
                                     Text(
                                         text = annotatedText,
                                         fontSize = fontSize.sp,
@@ -2808,18 +2912,32 @@ class MainActivity : ComponentActivity() {
                                     IconButton(onClick = { showNoteDialog = true }, modifier = Modifier.size(32.dp)) {
                                         Icon(Icons.Rounded.EditNote, contentDescription = "Nota/Sublinhar/Cores", tint = Color(0xFFE3ECE7))
                                     }
-                                    IconButton(onClick = { openDictionaryOrTranslate(draftSelection) }, modifier = Modifier.size(32.dp)) {
-                                        Icon(Icons.Rounded.Translate, contentDescription = "Dicionário / Tradutor", tint = Color(0xFFE3ECE7))
-                                    }
                                     IconButton(
                                         onClick = {
-                                            researchQueryInput = draftSelection
-                                            showResearchHubDialog = true
                                             showStudyBanner = false
+                                            openToolInsideApp("DICTIONARY", draftSelection)
                                         },
                                         modifier = Modifier.size(32.dp)
                                     ) {
-                                        Icon(Icons.Rounded.TravelExplore, contentDescription = "IA / Google", tint = Color(0xFFE3ECE7))
+                                        Icon(Icons.Rounded.MenuBook, contentDescription = "Dicionário na App", tint = Color(0xFFE3ECE7))
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            showStudyBanner = false
+                                            openToolInsideApp("TRANSLATE", draftSelection)
+                                        },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(Icons.Rounded.Translate, contentDescription = "Tradutor na App", tint = Color(0xFFE3ECE7))
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            showStudyBanner = false
+                                            openToolInsideApp("SEARCH", draftSelection)
+                                        },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(Icons.Rounded.TravelExplore, contentDescription = "Pesquisar na App", tint = Color(0xFFE3ECE7))
                                     }
                                     IconButton(onClick = { showStudyBanner = false }, modifier = Modifier.size(28.dp)) {
                                         Icon(Icons.Rounded.Close, contentDescription = "Fechar", tint = Color(0xFFE3ECE7).copy(alpha = 0.6f))
@@ -3283,17 +3401,17 @@ class MainActivity : ComponentActivity() {
                                                 ) {
                                                     Button(
                                                         colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color(0xFF07120E)),
-                                                        onClick = { openDictionaryOrTranslate(lookupQueryInput) }
+                                                        onClick = { openToolInsideApp("DICTIONARY", lookupQueryInput) }
                                                     ) {
                                                         Text("Dicionário", fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
                                                     }
                                                     OutlinedButton(onClick = {
-                                                        openResearchTarget(ResearchToolTarget.TRANSLATE, lookupQueryInput)
+                                                        openToolInsideApp("TRANSLATE", lookupQueryInput)
                                                     }) {
                                                         Text("Traduzir", color = currentTheme.text, maxLines = 1, softWrap = false)
                                                     }
                                                     OutlinedButton(onClick = {
-                                                        openResearchTarget(ResearchToolTarget.GOOGLE_SEARCH, lookupQueryInput)
+                                                        openToolInsideApp("SEARCH", lookupQueryInput)
                                                     }) {
                                                         Text("Pesquisar", color = currentTheme.text, maxLines = 1, softWrap = false)
                                                     }
@@ -3873,7 +3991,7 @@ class MainActivity : ComponentActivity() {
                                             modifier = Modifier.fillMaxWidth()
                                         ) {
                                             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                                Text("Dicionário, Tradutor, IA e Google", fontWeight = FontWeight.Bold, color = currentTheme.text)
+                                                Text("Dicionário, Tradutor, IA e Pesquisa na App", fontWeight = FontWeight.Bold, color = currentTheme.text)
                                                 OutlinedTextField(
                                                     value = lookupQueryInput,
                                                     onValueChange = { lookupQueryInput = it },
@@ -3888,14 +4006,19 @@ class MainActivity : ComponentActivity() {
                                                 ) {
                                                     Button(
                                                         colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color(0xFF07120E)),
-                                                        onClick = { openDictionaryOrTranslate(lookupQueryInput) }
+                                                        onClick = { openToolInsideApp("DICTIONARY", lookupQueryInput) }
                                                     ) {
-                                                        Text("Consultar", fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
+                                                        Text("Dicionário", fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
                                                     }
                                                     OutlinedButton(onClick = {
-                                                        openResearchTarget(ResearchToolTarget.GOOGLE_SEARCH, lookupQueryInput)
+                                                        openToolInsideApp("TRANSLATE", lookupQueryInput)
                                                     }) {
-                                                        Text("Google", color = currentTheme.text, maxLines = 1, softWrap = false)
+                                                        Text("Tradutor", color = currentTheme.text, maxLines = 1, softWrap = false)
+                                                    }
+                                                    OutlinedButton(onClick = {
+                                                        openToolInsideApp("SEARCH", lookupQueryInput)
+                                                    }) {
+                                                        Text("Pesquisar", color = currentTheme.text, maxLines = 1, softWrap = false)
                                                     }
                                                     OutlinedButton(onClick = {
                                                         openResearchTarget(ResearchToolTarget.AI_ASSISTANT, lookupQueryInput)
@@ -4533,7 +4656,7 @@ class MainActivity : ComponentActivity() {
                                     }
                                     item {
                                         Text("Fornecedor de dicionário/tradutor", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
-                                        listOf("Google Tradutor", "Priberam / Dicio", "Linguee / DeepL").forEach { provider ->
+                                        listOf("Dicionário / Tradutor", "Priberam / Dicio", "Google Tradutor").forEach { provider ->
                                             Row(verticalAlignment = Alignment.CenterVertically) {
                                                 RadioButton(
                                                     selected = dictionaryProvider == provider,
