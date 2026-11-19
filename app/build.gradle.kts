@@ -53,4 +53,6 @@ dependencies {
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
     implementation("androidx.multidex:multidex:2.0.1")
     implementation("org.jsoup:jsoup:1.17.2")
+    // Inferência local para modelos .onnx (Kokoro / Piper / Supertonic)
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.19.2")
 }
