@@ -1,5 +1,6 @@
 package com.glowreader.app
 
+import android.app.Activity
 import android.net.Uri
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
@@ -66,14 +67,21 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val context = LocalContext.current
+            val activity = context as? Activity
             val clipboard = LocalClipboardManager.current
             val scope = rememberCoroutineScope()
 
+            // 0 = Início, 1 = Biblioteca, 2 = Caderno, 3 = Definições
             var currentTab by remember { mutableIntStateOf(0) }
             var currentTheme by remember { mutableStateOf(ReaderTheme.SEPIA) }
             var fontSize by remember { mutableFloatStateOf(19f) }
             var currentFont by remember { mutableStateOf(ReaderFont.SERIF) }
             var currentAlign by remember { mutableStateOf(ReaderAlignment.JUSTIFY) }
+
+            // Modos de leitura, ecrã inteiro e comportamento das barras
+            var readingViewMode by remember { mutableStateOf(ReadingViewMode.SCROLL) }
+            var barsBehaviorMode by remember { mutableStateOf(BarsBehaviorMode.ALWAYS_VISIBLE) }
+            var isFullscreenMode by remember { mutableStateOf(false) }
 
             var savedBooks by remember { mutableStateOf(LibraryManager.loadLibrary(context)) }
             var activeBookMeta by remember { mutableStateOf<SavedBookMeta?>(null) }
@@ -81,6 +89,7 @@ class MainActivity : ComponentActivity() {
             var currentChapterIndex by remember { mutableIntStateOf(0) }
             var isImporting by remember { mutableStateOf(false) }
 
+            // Importação de página/artigo da web por URL
             var showWebImportDialog by remember { mutableStateOf(false) }
             var webUrlInput by remember { mutableStateOf("") }
             var webImportError by remember { mutableStateOf<String?>(null) }
@@ -135,6 +144,7 @@ class MainActivity : ComponentActivity() {
                 })
                 tts = engine
                 onDispose {
+                    ReaderLayoutController.applyFullscreenSystemBars(activity, false)
                     engine.stop()
                     engine.shutdown()
                 }
@@ -319,10 +329,33 @@ class MainActivity : ComponentActivity() {
             val currentBook = activeBookContent
             val currentMeta = activeBookMeta
 
+            LaunchedEffect(currentBook, isFullscreenMode) {
+                ReaderLayoutController.applyFullscreenSystemBars(
+                    activity = activity,
+                    fullscreen = currentBook != null && isFullscreenMode
+                )
+            }
+
             if (currentBook != null && currentMeta != null) {
                 val scrollState = rememberScrollState(initial = currentMeta.lastScrollPosition)
                 val activeChapter = currentBook.chapters.getOrElse(currentChapterIndex) { BookChapter("Vazio", "") }
                 val textContent = activeChapter.content
+
+                val pages = remember(textContent, fontSize) {
+                    val dynamicChars = (2200f * (19f / fontSize.coerceIn(12f, 36f))).toInt()
+                    ReaderLayoutController.paginateChapter(textContent, dynamicChars)
+                }
+                var currentPageIndex by remember(currentChapterIndex, pages.size) { mutableIntStateOf(0) }
+
+                var barsVisible by remember(currentChapterIndex, barsBehaviorMode) {
+                    mutableStateOf(barsBehaviorMode != BarsBehaviorMode.TAP_TO_TOGGLE)
+                }
+
+                LaunchedEffect(scrollState.isScrollInProgress, barsBehaviorMode) {
+                    if (scrollState.isScrollInProgress && barsBehaviorMode == BarsBehaviorMode.HIDE_ON_ADVANCE) {
+                        barsVisible = false
+                    }
+                }
 
                 var showTocSheet by remember { mutableStateOf(false) }
                 var showTypeSheet by remember { mutableStateOf(false) }
@@ -342,10 +375,17 @@ class MainActivity : ComponentActivity() {
 
                 LaunchedEffect(activeSentenceRange) {
                     val range = activeSentenceRange
-                    if (range != null && textContent.isNotEmpty() && scrollState.maxValue > 0) {
-                        val ratio = range.first.toFloat() / textContent.length.toFloat()
-                        val targetScroll = (ratio * scrollState.maxValue).toInt()
-                        scrollState.animateScrollTo(targetScroll)
+                    if (range != null && textContent.isNotEmpty()) {
+                        if (readingViewMode == ReadingViewMode.SCROLL && scrollState.maxValue > 0) {
+                            val ratio = range.first.toFloat() / textContent.length.toFloat()
+                            val targetScroll = (ratio * scrollState.maxValue).toInt()
+                            scrollState.animateScrollTo(targetScroll)
+                        } else if (readingViewMode == ReadingViewMode.PAGED && pages.size > 1) {
+                            val pageIdx = ((range.first.toFloat() / textContent.length.toFloat()) * pages.size)
+                                .toInt()
+                                .coerceIn(0, pages.lastIndex)
+                            currentPageIndex = pageIdx
+                        }
                     }
                 }
 
@@ -388,6 +428,7 @@ class MainActivity : ComponentActivity() {
                         onJumpToChapter = { idx ->
                             stopAudio()
                             currentChapterIndex = idx.coerceIn(0, (currentBook.chapters.size - 1).coerceAtLeast(0))
+                            currentPageIndex = 0
                             scope.launch { scrollState.scrollTo(0) }
                         },
                         onDismiss = { showNotebookSheet = false }
@@ -492,6 +533,7 @@ class MainActivity : ComponentActivity() {
                                             .clickable {
                                                 stopAudio()
                                                 currentChapterIndex = index
+                                                currentPageIndex = 0
                                                 showTocSheet = false
                                                 scope.launch { scrollState.scrollTo(0) }
                                             }
@@ -511,73 +553,124 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                val showTopAndBottomBars = barsBehaviorMode == BarsBehaviorMode.ALWAYS_VISIBLE || barsVisible
+                val displayedText = if (readingViewMode == ReadingViewMode.PAGED) {
+                    pages.getOrElse(currentPageIndex) { "" }
+                } else {
+                    textContent
+                }
+
                 Surface(modifier = Modifier.fillMaxSize(), color = currentTheme.bg) {
                     Box(modifier = Modifier.fillMaxSize()) {
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
+                                .clickable {
+                                    if (barsBehaviorMode != BarsBehaviorMode.ALWAYS_VISIBLE) {
+                                        barsVisible = !barsVisible
+                                    }
+                                }
                                 .padding(horizontal = 22.dp)
-                                .verticalScroll(scrollState)
-                                .padding(top = 16.dp, bottom = 140.dp)
+                                .then(
+                                    if (readingViewMode == ReadingViewMode.SCROLL) {
+                                        Modifier.verticalScroll(scrollState)
+                                    } else {
+                                        Modifier
+                                    }
+                                )
+                                .padding(top = 16.dp, bottom = 150.dp)
                         ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                IconButton(onClick = {
-                                    stopAudio()
-                                    LibraryManager.updateReadingProgress(context, currentMeta.id, currentChapterIndex, scrollState.value)
-                                    savedBooks = LibraryManager.loadLibrary(context)
-                                    activeBookContent = null
-                                    activeBookMeta = null
-                                }) {
-                                    Icon(Icons.Rounded.ArrowBack, contentDescription = "Voltar", tint = currentTheme.text)
-                                }
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = currentBook.title,
-                                        fontSize = 16.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        color = currentTheme.text
-                                    )
-                                    Text(
-                                        text = activeChapter.title,
-                                        fontSize = 12.sp,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        color = currentTheme.text.copy(alpha = 0.65f)
-                                    )
-                                }
-                                Row {
-                                    IconButton(onClick = { showTocSheet = true }, modifier = Modifier.size(36.dp)) {
-                                        Icon(Icons.Rounded.FormatListBulleted, contentDescription = "Índice", tint = currentTheme.text)
-                                    }
+                            if (showTopAndBottomBars) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
                                     IconButton(onClick = {
-                                        val bm = StudyAnnotation(
-                                            bookTitle = currentBook.title,
-                                            chapterIndex = currentChapterIndex,
-                                            chapterTitle = activeChapter.title,
-                                            selectedText = textContent.take(70) + "...",
-                                            isBookmark = true
+                                        stopAudio()
+                                        ReaderLayoutController.applyFullscreenSystemBars(activity, false)
+                                        LibraryManager.updateReadingProgress(context, currentMeta.id, currentChapterIndex, scrollState.value)
+                                        savedBooks = LibraryManager.loadLibrary(context)
+                                        activeBookContent = null
+                                        activeBookMeta = null
+                                    }) {
+                                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Voltar", tint = currentTheme.text)
+                                    }
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = currentBook.title,
+                                            fontSize = 16.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            color = currentTheme.text
                                         )
-                                        annotations = listOf(bm) + annotations
-                                        ReaderStorage.saveAnnotations(context, annotations)
-                                    }, modifier = Modifier.size(36.dp)) {
-                                        Icon(Icons.Rounded.BookmarkAdd, contentDescription = "Marcador", tint = currentTheme.text)
+                                        val subLabel = if (readingViewMode == ReadingViewMode.PAGED) {
+                                            "${activeChapter.title} • Pág. ${currentPageIndex + 1}/${pages.size}"
+                                        } else {
+                                            activeChapter.title
+                                        }
+                                        Text(
+                                            text = subLabel,
+                                            fontSize = 12.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            color = currentTheme.text.copy(alpha = 0.65f)
+                                        )
                                     }
-                                    IconButton(onClick = { showNotebookSheet = true }, modifier = Modifier.size(36.dp)) {
-                                        Icon(Icons.Rounded.Book, contentDescription = "Notas", tint = currentTheme.text)
-                                    }
-                                    IconButton(onClick = { showTypeSheet = true }, modifier = Modifier.size(36.dp)) {
-                                        Icon(Icons.Rounded.FormatSize, contentDescription = "Fontes", tint = currentTheme.text)
+                                    Row {
+                                        IconButton(
+                                            onClick = {
+                                                readingViewMode = if (readingViewMode == ReadingViewMode.SCROLL) {
+                                                    ReadingViewMode.PAGED
+                                                } else {
+                                                    ReadingViewMode.SCROLL
+                                                }
+                                            },
+                                            modifier = Modifier.size(36.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = if (readingViewMode == ReadingViewMode.PAGED) Icons.Rounded.ViewStream else Icons.Rounded.AutoStories,
+                                                contentDescription = "Rolagem/Páginas",
+                                                tint = currentTheme.text
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = { isFullscreenMode = !isFullscreenMode },
+                                            modifier = Modifier.size(36.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = if (isFullscreenMode) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
+                                                contentDescription = "Ecrã inteiro",
+                                                tint = currentTheme.text
+                                            )
+                                        }
+                                        IconButton(onClick = { showTocSheet = true }, modifier = Modifier.size(36.dp)) {
+                                            Icon(Icons.Rounded.FormatListBulleted, contentDescription = "Índice", tint = currentTheme.text)
+                                        }
+                                        IconButton(onClick = {
+                                            val bm = StudyAnnotation(
+                                                bookTitle = currentBook.title,
+                                                chapterIndex = currentChapterIndex,
+                                                chapterTitle = activeChapter.title,
+                                                selectedText = displayedText.take(70) + "...",
+                                                isBookmark = true
+                                            )
+                                            annotations = listOf(bm) + annotations
+                                            ReaderStorage.saveAnnotations(context, annotations)
+                                        }, modifier = Modifier.size(36.dp)) {
+                                            Icon(Icons.Rounded.BookmarkAdd, contentDescription = "Marcador", tint = currentTheme.text)
+                                        }
+                                        IconButton(onClick = { showNotebookSheet = true }, modifier = Modifier.size(36.dp)) {
+                                            Icon(Icons.Rounded.Book, contentDescription = "Notas", tint = currentTheme.text)
+                                        }
+                                        IconButton(onClick = { showTypeSheet = true }, modifier = Modifier.size(36.dp)) {
+                                            Icon(Icons.Rounded.FormatSize, contentDescription = "Fontes", tint = currentTheme.text)
+                                        }
                                     }
                                 }
+                                Spacer(modifier = Modifier.height(16.dp))
                             }
-
-                            Spacer(modifier = Modifier.height(16.dp))
 
                             val bookAnnotations = annotations.filter {
                                 it.bookTitle == currentBook.title &&
@@ -585,10 +678,10 @@ class MainActivity : ComponentActivity() {
                                     !it.isBookmark
                             }
                             val annotatedText = buildAnnotatedString {
-                                append(textContent)
+                                append(displayedText)
                                 bookAnnotations.forEach { ann ->
                                     if (ann.selectedText.isNotBlank()) {
-                                        val idx = textContent.indexOf(ann.selectedText)
+                                        val idx = displayedText.indexOf(ann.selectedText)
                                         if (idx >= 0) {
                                             val c = try {
                                                 HighlightColor.valueOf(ann.colorName).toColor()
@@ -606,17 +699,19 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
                                 }
-                                activeSentenceRange?.let { range ->
-                                    if (range.first >= 0 && range.last < textContent.length) {
-                                        addStyle(
-                                            SpanStyle(
-                                                background = currentTheme.highlightBg,
-                                                color = currentTheme.highlightText,
-                                                fontWeight = FontWeight.Bold
-                                            ),
-                                            range.first,
-                                            range.last + 1
-                                        )
+                                if (readingViewMode == ReadingViewMode.SCROLL) {
+                                    activeSentenceRange?.let { range ->
+                                        if (range.first >= 0 && range.last < displayedText.length) {
+                                            addStyle(
+                                                SpanStyle(
+                                                    background = currentTheme.highlightBg,
+                                                    color = currentTheme.highlightText,
+                                                    fontWeight = FontWeight.Bold
+                                                ),
+                                                range.first,
+                                                range.last + 1
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -630,6 +725,47 @@ class MainActivity : ComponentActivity() {
                                     textAlign = currentAlign.align,
                                     color = currentTheme.text
                                 )
+                            }
+
+                            if (readingViewMode == ReadingViewMode.PAGED && pages.size > 1) {
+                                Spacer(modifier = Modifier.height(20.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            if (currentPageIndex > 0) {
+                                                currentPageIndex--
+                                                if (barsBehaviorMode == BarsBehaviorMode.HIDE_ON_ADVANCE) {
+                                                    barsVisible = false
+                                                }
+                                            }
+                                        },
+                                        enabled = currentPageIndex > 0
+                                    ) {
+                                        Text("Página anterior")
+                                    }
+                                    Text(
+                                        text = "${currentPageIndex + 1} / ${pages.size}",
+                                        color = currentTheme.text,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Button(
+                                        onClick = {
+                                            if (currentPageIndex < pages.lastIndex) {
+                                                currentPageIndex++
+                                                if (barsBehaviorMode == BarsBehaviorMode.HIDE_ON_ADVANCE) {
+                                                    barsVisible = false
+                                                }
+                                            }
+                                        },
+                                        enabled = currentPageIndex < pages.lastIndex
+                                    ) {
+                                        Text("Próxima página")
+                                    }
+                                }
                             }
                         }
 
@@ -683,74 +819,78 @@ class MainActivity : ComponentActivity() {
                             }
                         }
 
-                        Surface(
-                            modifier = Modifier
-                                .align(Alignment.BottomCenter)
-                                .padding(16.dp)
-                                .fillMaxWidth(),
-                            shape = RoundedCornerShape(32.dp),
-                            color = currentTheme.barBg,
-                            shadowElevation = 8.dp
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                        if (showTopAndBottomBars) {
+                            Surface(
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .padding(16.dp)
+                                    .fillMaxWidth(),
+                                shape = RoundedCornerShape(32.dp),
+                                color = currentTheme.barBg,
+                                shadowElevation = 8.dp
                             ) {
-                                TextButton(onClick = {
-                                    speechRate = when (speechRate) {
-                                        1.0f -> 1.25f
-                                        1.25f -> 1.5f
-                                        1.5f -> 2.0f
-                                        else -> 1.0f
-                                    }
-                                    if (isPlaying) {
-                                        stopAudio()
-                                        startAudio(textContent)
-                                    }
-                                }) {
-                                    Text("${speechRate}x", fontWeight = FontWeight.Bold, color = currentTheme.text)
-                                }
-                                IconButton(
-                                    onClick = {
-                                        if (currentChapterIndex > 0) {
-                                            stopAudio()
-                                            currentChapterIndex--
-                                            scope.launch { scrollState.scrollTo(0) }
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    TextButton(onClick = {
+                                        speechRate = when (speechRate) {
+                                            1.0f -> 1.25f
+                                            1.25f -> 1.5f
+                                            1.5f -> 2.0f
+                                            else -> 1.0f
                                         }
-                                    },
-                                    enabled = currentChapterIndex > 0
-                                ) {
-                                    Icon(Icons.Rounded.SkipPrevious, contentDescription = "Anterior", tint = currentTheme.text)
-                                }
-                                IconButton(
-                                    onClick = { if (isPlaying) stopAudio() else startAudio(textContent) },
-                                    modifier = Modifier
-                                        .size(52.dp)
-                                        .clip(CircleShape)
-                                        .background(Color(0xFF4F46E5))
-                                ) {
-                                    Icon(
-                                        imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                                        contentDescription = "Play/Pause",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(28.dp)
-                                    )
-                                }
-                                IconButton(
-                                    onClick = {
-                                        if (currentChapterIndex < currentBook.chapters.size - 1) {
+                                        if (isPlaying) {
                                             stopAudio()
-                                            currentChapterIndex++
-                                            scope.launch { scrollState.scrollTo(0) }
+                                            startAudio(textContent)
                                         }
-                                    },
-                                    enabled = currentChapterIndex < currentBook.chapters.size - 1
-                                ) {
-                                    Icon(Icons.Rounded.SkipNext, contentDescription = "Seguinte", tint = currentTheme.text)
-                                }
-                                IconButton(onClick = { stopAudio() }) {
-                                    Icon(Icons.Rounded.Stop, contentDescription = "Parar", tint = currentTheme.text)
+                                    }) {
+                                        Text("${speechRate}x", fontWeight = FontWeight.Bold, color = currentTheme.text)
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            if (currentChapterIndex > 0) {
+                                                stopAudio()
+                                                currentChapterIndex--
+                                                currentPageIndex = 0
+                                                scope.launch { scrollState.scrollTo(0) }
+                                            }
+                                        },
+                                        enabled = currentChapterIndex > 0
+                                    ) {
+                                        Icon(Icons.Rounded.SkipPrevious, contentDescription = "Anterior", tint = currentTheme.text)
+                                    }
+                                    IconButton(
+                                        onClick = { if (isPlaying) stopAudio() else startAudio(textContent) },
+                                        modifier = Modifier
+                                            .size(52.dp)
+                                            .clip(CircleShape)
+                                            .background(Color(0xFF4F46E5))
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                            contentDescription = "Play/Pause",
+                                            tint = Color.White,
+                                            modifier = Modifier.size(28.dp)
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            if (currentChapterIndex < currentBook.chapters.size - 1) {
+                                                stopAudio()
+                                                currentChapterIndex++
+                                                currentPageIndex = 0
+                                                scope.launch { scrollState.scrollTo(0) }
+                                            }
+                                        },
+                                        enabled = currentChapterIndex < currentBook.chapters.size - 1
+                                    ) {
+                                        Icon(Icons.Rounded.SkipNext, contentDescription = "Seguinte", tint = currentTheme.text)
+                                    }
+                                    IconButton(onClick = { stopAudio() }) {
+                                        Icon(Icons.Rounded.Stop, contentDescription = "Parar", tint = currentTheme.text)
+                                    }
                                 }
                             }
                         }
@@ -961,32 +1101,77 @@ class MainActivity : ComponentActivity() {
                             }
 
                             else -> {
-                                Column(
+                                LazyColumn(
                                     modifier = Modifier
                                         .fillMaxSize()
                                         .background(currentTheme.bg)
                                         .padding(16.dp),
                                     verticalArrangement = Arrangement.spacedBy(14.dp)
                                 ) {
-                                    Text("Definições", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = currentTheme.text)
-                                    Text("Tema da leitura", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        ReaderTheme.entries.forEach { themeOption ->
-                                            FilterChip(
-                                                selected = currentTheme == themeOption,
-                                                onClick = { currentTheme = themeOption },
-                                                label = { Text(themeOption.label) }
+                                    item {
+                                        Text("Definições", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = currentTheme.text)
+                                    }
+                                    item {
+                                        Text("Tema da leitura", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            ReaderTheme.entries.forEach { themeOption ->
+                                                FilterChip(
+                                                    selected = currentTheme == themeOption,
+                                                    onClick = { currentTheme = themeOption },
+                                                    label = { Text(themeOption.label) }
+                                                )
+                                            }
+                                        }
+                                    }
+                                    item {
+                                        Text("Modo de leitura", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            ReadingViewMode.entries.forEach { modeOption ->
+                                                FilterChip(
+                                                    selected = readingViewMode == modeOption,
+                                                    onClick = { readingViewMode = modeOption },
+                                                    label = { Text(modeOption.label) }
+                                                )
+                                            }
+                                        }
+                                    }
+                                    item {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text("Ecrã inteiro ao ler", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
+                                            Switch(
+                                                checked = isFullscreenMode,
+                                                onCheckedChange = { isFullscreenMode = it }
                                             )
                                         }
                                     }
-                                    Text("Fornecedor de dicionário/tradutor", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
-                                    listOf("Google Tradutor", "Priberam / Dicio", "Linguee / DeepL").forEach { provider ->
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            RadioButton(
-                                                selected = dictionaryProvider == provider,
-                                                onClick = { dictionaryProvider = provider }
-                                            )
-                                            Text(provider, color = currentTheme.text)
+                                    item {
+                                        Text("Comportamento das barras ao avançar", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
+                                        BarsBehaviorMode.entries.forEach { barOption ->
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                RadioButton(
+                                                    selected = barsBehaviorMode == barOption,
+                                                    onClick = { barsBehaviorMode = barOption }
+                                                )
+                                                Text(barOption.label, color = currentTheme.text)
+                                            }
+                                        }
+                                    }
+                                    item {
+                                        Text("Fornecedor de dicionário/tradutor", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
+                                        listOf("Google Tradutor", "Priberam / Dicio", "Linguee / DeepL").forEach { provider ->
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                RadioButton(
+                                                    selected = dictionaryProvider == provider,
+                                                    onClick = { dictionaryProvider = provider }
+                                                )
+                                                Text(provider, color = currentTheme.text)
+                                            }
                                         }
                                     }
                                 }
