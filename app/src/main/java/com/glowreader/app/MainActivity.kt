@@ -11,6 +11,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -30,6 +31,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -40,7 +42,6 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.net.URLEncoder
 import java.util.Locale
 
 enum class ReaderTheme(
@@ -83,6 +84,28 @@ class MainActivity : ComponentActivity() {
             var isFullscreenMode by remember { mutableStateOf(false) }
 
             var savedBooks by remember { mutableStateOf(LibraryManager.loadLibrary(context)) }
+            var orgMetaMap by remember {
+                mutableStateOf(LibraryOrganizationManager.ensureBooksRegistered(context, savedBooks))
+            }
+            var categories by remember { mutableStateOf(LibraryOrganizationManager.loadAllCategories(context)) }
+            var selectedCategory by remember { mutableStateOf("Todos") }
+            var showSecretShelf by remember { mutableStateOf(false) }
+            var librarySearchQuery by remember { mutableStateOf("") }
+            var formatFilter by remember { mutableStateOf("Todos") }
+            var sortOption by remember { mutableStateOf(LibrarySortOption.RECENT_ORDER) }
+
+            // Diálogos de organização da biblioteca
+            var showAddCategoryDialog by remember { mutableStateOf(false) }
+            var newCategoryName by remember { mutableStateOf("") }
+            var categoryTargetBook by remember { mutableStateOf<SavedBookMeta?>(null) }
+
+            var showSecretPinDialog by remember { mutableStateOf(false) }
+            var secretPinInput by remember { mutableStateOf("") }
+            var secretPinError by remember { mutableStateOf<String?>(null) }
+            var pendingSecretBookToggle by remember { mutableStateOf<SavedBookMeta?>(null) }
+
+            var showDuplicatesSheet by remember { mutableStateOf(false) }
+
             var activeBookMeta by remember { mutableStateOf<SavedBookMeta?>(null) }
             var activeBookContent by remember { mutableStateOf<ParsedBook?>(null) }
             var currentChapterIndex by remember { mutableIntStateOf(0) }
@@ -94,8 +117,13 @@ class MainActivity : ComponentActivity() {
             var webImportError by remember { mutableStateOf<String?>(null) }
             var webImportStatus by remember { mutableStateOf<String?>(null) }
 
+            // Caderno, dicionário/tradutor, histórico e exportação
             var annotations by remember { mutableStateOf(ReaderStorage.loadAnnotations(context)) }
             var dictionaryProvider by remember { mutableStateOf("Google Tradutor") }
+            var translationTargetLang by remember { mutableStateOf("pt") }
+            var lookupQueryInput by remember { mutableStateOf("") }
+            var lookupHistory by remember { mutableStateOf(StudyNotebookManager.loadLookupHistory(context)) }
+            var exportStatusMessage by remember { mutableStateOf<String?>(null) }
 
             var internalLookupTitle by remember { mutableStateOf<String?>(null) }
             var internalLookupUrl by remember { mutableStateOf<String?>(null) }
@@ -119,6 +147,13 @@ class MainActivity : ComponentActivity() {
             var audioStatusMessage by remember { mutableStateOf<String?>(null) }
             var isExportingAudio by remember { mutableStateOf(false) }
             var showSavedAudioSheet by remember { mutableStateOf(false) }
+
+            fun refreshLibraryAndOrg() {
+                val loaded = LibraryManager.loadLibrary(context)
+                savedBooks = loaded
+                orgMetaMap = LibraryOrganizationManager.ensureBooksRegistered(context, loaded)
+                categories = LibraryOrganizationManager.loadAllCategories(context)
+            }
 
             LaunchedEffect(Unit) {
                 piperModelsCount = voiceEngine.checkLocalPiperModels().size
@@ -165,21 +200,16 @@ class MainActivity : ComponentActivity() {
 
             fun openDictionaryOrTranslate(query: String) {
                 val clean = query.trim()
-                val encoded = URLEncoder.encode(clean, "UTF-8")
-                when (dictionaryProvider) {
-                    "Priberam / Dicio" -> {
-                        internalLookupTitle = if (clean.isBlank()) "Dicionário" else "Dicionário: $clean"
-                        internalLookupUrl = if (clean.isBlank()) "https://www.dicio.com.br/" else "https://www.dicio.com.br/$encoded/"
-                    }
-                    "Linguee / DeepL" -> {
-                        internalLookupTitle = if (clean.isBlank()) "DeepL Tradutor" else "Traduzir: $clean"
-                        internalLookupUrl = "https://www.deepl.com/translator#pt/en/$encoded"
-                    }
-                    else -> {
-                        internalLookupTitle = if (clean.isBlank()) "Tradutor" else "Traduzir: $clean"
-                        internalLookupUrl = "https://translate.google.com/?sl=auto&tl=pt&text=$encoded"
-                    }
+                if (clean.isNotEmpty()) {
+                    lookupHistory = StudyNotebookManager.recordLookup(context, clean, dictionaryProvider)
                 }
+                val (title, url) = StudyNotebookManager.buildLookupUrl(
+                    query = clean,
+                    provider = dictionaryProvider,
+                    targetLang = translationTargetLang
+                )
+                internalLookupTitle = title
+                internalLookupUrl = url
             }
 
             fun openBookMeta(meta: SavedBookMeta) {
@@ -188,6 +218,28 @@ class MainActivity : ComponentActivity() {
                     activeBookMeta = meta
                     activeBookContent = loaded
                     currentChapterIndex = meta.lastChapterIndex.coerceIn(0, (loaded.chapters.size - 1).coerceAtLeast(0))
+                }
+            }
+
+            fun requestSecretShelfAccess(bookToToggle: SavedBookMeta? = null) {
+                if (!LibraryOrganizationManager.hasSecretPin(context)) {
+                    pendingSecretBookToggle = bookToToggle
+                    secretPinInput = ""
+                    secretPinError = null
+                    showSecretPinDialog = true
+                    return
+                }
+                if (LibraryOrganizationManager.isSecretUnlocked(context)) {
+                    if (bookToToggle != null) {
+                        orgMetaMap = LibraryOrganizationManager.toggleBookSecret(context, bookToToggle.id)
+                    } else {
+                        showSecretShelf = !showSecretShelf
+                    }
+                } else {
+                    pendingSecretBookToggle = bookToToggle
+                    secretPinInput = ""
+                    secretPinError = null
+                    showSecretPinDialog = true
                 }
             }
 
@@ -201,7 +253,7 @@ class MainActivity : ComponentActivity() {
                         withContext(Dispatchers.IO) {
                             LibraryManager.saveBookToLibrary(context, result.book, "WEB")
                         }
-                        savedBooks = LibraryManager.loadLibrary(context)
+                        refreshLibraryAndOrg()
                         webImportStatus = null
                         webImportError = null
                         webUrlInput = ""
@@ -233,9 +285,224 @@ class MainActivity : ComponentActivity() {
                             withContext(Dispatchers.IO) {
                                 LibraryManager.saveBookToLibrary(context, parsedBook, format)
                             }
-                            savedBooks = LibraryManager.loadLibrary(context)
+                            refreshLibraryAndOrg()
                         }
                         isImporting = false
+                    }
+                }
+            }
+
+            if (showAddCategoryDialog) {
+                AlertDialog(
+                    onDismissRequest = { showAddCategoryDialog = false },
+                    title = { Text("Nova categoria") },
+                    text = {
+                        OutlinedTextField(
+                            value = newCategoryName,
+                            onValueChange = { newCategoryName = it },
+                            label = { Text("Ex.: Psicologia, Ficção, Estudos") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    },
+                    confirmButton = {
+                        Button(onClick = {
+                            if (newCategoryName.isNotBlank()) {
+                                categories = LibraryOrganizationManager.addCustomCategory(context, newCategoryName)
+                                selectedCategory = newCategoryName.trim()
+                                newCategoryName = ""
+                            }
+                            showAddCategoryDialog = false
+                        }) {
+                            Text("Criar")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showAddCategoryDialog = false }) { Text("Cancelar") }
+                    }
+                )
+            }
+
+            val bookForCat = categoryTargetBook
+            if (bookForCat != null) {
+                val currentBookCat = orgMetaMap[bookForCat.id]?.category ?: "A ler"
+                AlertDialog(
+                    onDismissRequest = { categoryTargetBook = null },
+                    title = { Text("Categoria — ${bookForCat.title}") },
+                    text = {
+                        Column {
+                            categories.forEach { cat ->
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            orgMetaMap = LibraryOrganizationManager.setBookCategory(context, bookForCat.id, cat)
+                                            categoryTargetBook = null
+                                        }
+                                        .padding(vertical = 4.dp)
+                                ) {
+                                    RadioButton(
+                                        selected = currentBookCat == cat,
+                                        onClick = {
+                                            orgMetaMap = LibraryOrganizationManager.setBookCategory(context, bookForCat.id, cat)
+                                            categoryTargetBook = null
+                                        }
+                                    )
+                                    Text(cat)
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { categoryTargetBook = null }) { Text("Fechar") }
+                    }
+                )
+            }
+
+            if (showSecretPinDialog) {
+                val pinAlreadySet = LibraryOrganizationManager.hasSecretPin(context)
+                AlertDialog(
+                    onDismissRequest = {
+                        showSecretPinDialog = false
+                        pendingSecretBookToggle = null
+                    },
+                    title = {
+                        Text(if (pinAlreadySet) "Desbloquear estante secreta" else "Definir PIN da estante secreta")
+                    },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                text = if (pinAlreadySet) {
+                                    "Introduz o teu PIN para aceder ou mover itens da estante secreta."
+                                } else {
+                                    "Cria um PIN de pelo menos 4 dígitos para proteger os teus livros privados."
+                                },
+                                fontSize = 13.sp
+                            )
+                            OutlinedTextField(
+                                value = secretPinInput,
+                                onValueChange = {
+                                    secretPinInput = it
+                                    secretPinError = null
+                                },
+                                label = { Text("PIN (mín. 4 dígitos)") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            if (secretPinError != null) {
+                                Text(secretPinError!!, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        Button(onClick = {
+                            if (pinAlreadySet) {
+                                if (LibraryOrganizationManager.verifySecretPin(context, secretPinInput)) {
+                                    val toggleTarget = pendingSecretBookToggle
+                                    if (toggleTarget != null) {
+                                        orgMetaMap = LibraryOrganizationManager.toggleBookSecret(context, toggleTarget.id)
+                                    } else {
+                                        showSecretShelf = true
+                                    }
+                                    pendingSecretBookToggle = null
+                                    showSecretPinDialog = false
+                                } else {
+                                    secretPinError = "PIN incorreto."
+                                }
+                            } else {
+                                if (LibraryOrganizationManager.setSecretPin(context, secretPinInput)) {
+                                    val toggleTarget = pendingSecretBookToggle
+                                    if (toggleTarget != null) {
+                                        orgMetaMap = LibraryOrganizationManager.toggleBookSecret(context, toggleTarget.id)
+                                    } else {
+                                        showSecretShelf = true
+                                    }
+                                    pendingSecretBookToggle = null
+                                    showSecretPinDialog = false
+                                } else {
+                                    secretPinError = "Usa pelo menos 4 caracteres."
+                                }
+                            }
+                        }) {
+                            Text("Confirmar")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = {
+                            showSecretPinDialog = false
+                            pendingSecretBookToggle = null
+                        }) { Text("Cancelar") }
+                    }
+                )
+            }
+
+            if (showDuplicatesSheet) {
+                val duplicateGroups = LibraryOrganizationManager.findDuplicateGroups(savedBooks)
+                ModalBottomSheet(
+                    onDismissRequest = { showDuplicatesSheet = false },
+                    containerColor = currentTheme.barBg
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = "Livros Duplicados (${duplicateGroups.size} grupos)",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 18.sp,
+                            color = currentTheme.text
+                        )
+                        if (duplicateGroups.isEmpty()) {
+                            Text(
+                                text = "Não foram encontrados títulos duplicados na biblioteca.",
+                                fontSize = 13.sp,
+                                color = currentTheme.text.copy(alpha = 0.75f),
+                                modifier = Modifier.padding(vertical = 12.dp)
+                            )
+                        } else {
+                            LazyColumn(
+                                modifier = Modifier.heightIn(max = 360.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                items(duplicateGroups, key = { it.normalizedKey }) { group ->
+                                    Card(
+                                        colors = CardDefaults.cardColors(containerColor = currentTheme.bg),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                            Text(
+                                                text = group.books.first().title,
+                                                fontWeight = FontWeight.Bold,
+                                                color = currentTheme.text
+                                            )
+                                            group.books.forEach { dup ->
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Text(
+                                                        text = "${dup.format} • Cap. ${dup.lastChapterIndex + 1}",
+                                                        fontSize = 12.sp,
+                                                        color = currentTheme.text.copy(alpha = 0.75f)
+                                                    )
+                                                    TextButton(onClick = {
+                                                        LibraryManager.deleteBook(context, dup.id)
+                                                        refreshLibraryAndOrg()
+                                                    }) {
+                                                        Text("Remover esta cópia", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(20.dp))
                     }
                 }
             }
@@ -363,7 +630,7 @@ class MainActivity : ComponentActivity() {
                 DisposableEffect(currentChapterIndex) {
                     onDispose {
                         LibraryManager.updateReadingProgress(context, currentMeta.id, currentChapterIndex, scrollState.value)
-                        savedBooks = LibraryManager.loadLibrary(context)
+                        refreshLibraryAndOrg()
                     }
                 }
 
@@ -700,7 +967,7 @@ class MainActivity : ComponentActivity() {
                                         stopAudio()
                                         ReaderLayoutController.applyFullscreenSystemBars(activity, false)
                                         LibraryManager.updateReadingProgress(context, currentMeta.id, currentChapterIndex, scrollState.value)
-                                        savedBooks = LibraryManager.loadLibrary(context)
+                                        refreshLibraryAndOrg()
                                         activeBookContent = null
                                         activeBookMeta = null
                                     }) {
@@ -1110,6 +1377,17 @@ class MainActivity : ComponentActivity() {
                                         CircularProgressIndicator(color = Color(0xFF4F46E5))
                                     }
                                 } else {
+                                    val visibleBooks = LibraryOrganizationManager.filterAndSortBooks(
+                                        context = context,
+                                        books = savedBooks,
+                                        selectedCategory = selectedCategory,
+                                        showSecretShelf = showSecretShelf,
+                                        searchQuery = librarySearchQuery,
+                                        formatFilter = formatFilter,
+                                        sortOption = sortOption
+                                    )
+                                    val duplicateCount = LibraryOrganizationManager.findDuplicateGroups(savedBooks).size
+
                                     LazyColumn(
                                         modifier = Modifier
                                             .fillMaxSize()
@@ -1123,8 +1401,35 @@ class MainActivity : ComponentActivity() {
                                                 horizontalArrangement = Arrangement.SpaceBetween,
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
-                                                Text("Biblioteca", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = currentTheme.text)
-                                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                Text(
+                                                    text = if (showSecretShelf) "Estante Secreta" else "Biblioteca",
+                                                    fontSize = 24.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = currentTheme.text
+                                                )
+                                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                    IconButton(onClick = { showDuplicatesSheet = true }) {
+                                                        BadgedBox(badge = {
+                                                            if (duplicateCount > 0) {
+                                                                Badge { Text("$duplicateCount") }
+                                                            }
+                                                        }) {
+                                                            Icon(Icons.Rounded.ContentCopy, contentDescription = "Duplicados", tint = currentTheme.text)
+                                                        }
+                                                    }
+                                                    IconButton(onClick = {
+                                                        if (showSecretShelf) {
+                                                            showSecretShelf = false
+                                                        } else {
+                                                            requestSecretShelfAccess(null)
+                                                        }
+                                                    }) {
+                                                        Icon(
+                                                            imageVector = if (showSecretShelf) Icons.Rounded.LockOpen else Icons.Rounded.Lock,
+                                                            contentDescription = "Estante secreta",
+                                                            tint = currentTheme.text
+                                                        )
+                                                    }
                                                     FilledTonalButton(onClick = { showWebImportDialog = true }) {
                                                         Icon(Icons.Rounded.Language, contentDescription = null)
                                                         Spacer(modifier = Modifier.width(4.dp))
@@ -1140,16 +1445,87 @@ class MainActivity : ComponentActivity() {
                                                 }
                                             }
                                         }
-                                        if (savedBooks.isEmpty()) {
+
+                                        item {
+                                            OutlinedTextField(
+                                                value = librarySearchQuery,
+                                                onValueChange = { librarySearchQuery = it },
+                                                leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                                                label = { Text("Pesquisar título, formato ou categoria") },
+                                                singleLine = true,
+                                                modifier = Modifier.fillMaxWidth()
+                                            )
+                                        }
+
+                                        if (!showSecretShelf) {
+                                            item {
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .horizontalScroll(rememberScrollState()),
+                                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    (listOf("Todos") + categories).forEach { cat ->
+                                                        FilterChip(
+                                                            selected = selectedCategory == cat,
+                                                            onClick = { selectedCategory = cat },
+                                                            label = { Text(cat) }
+                                                        )
+                                                    }
+                                                    FilterChip(
+                                                        selected = false,
+                                                        onClick = {
+                                                            newCategoryName = ""
+                                                            showAddCategoryDialog = true
+                                                        },
+                                                        label = { Text("+ Categoria") }
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        item {
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .horizontalScroll(rememberScrollState()),
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                listOf("Todos", "EPUB", "PDF", "TXT", "WEB").forEach { fmt ->
+                                                    FilterChip(
+                                                        selected = formatFilter == fmt,
+                                                        onClick = { formatFilter = fmt },
+                                                        label = { Text(fmt) }
+                                                    )
+                                                }
+                                                LibrarySortOption.entries.forEach { opt ->
+                                                    FilterChip(
+                                                        selected = sortOption == opt,
+                                                        onClick = { sortOption = opt },
+                                                        label = { Text(opt.label) }
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        if (visibleBooks.isEmpty()) {
                                             item {
                                                 Text(
-                                                    text = "A tua biblioteca ainda está vazia. Toca em Ficheiro ou URL para adicionar conteúdo.",
+                                                    text = if (showSecretShelf) {
+                                                        "A estante secreta está vazia. Usa o ícone de cadeado num livro para o guardar aqui."
+                                                    } else {
+                                                        "Nenhum livro encontrado com os filtros atuais."
+                                                    },
                                                     color = currentTheme.text.copy(alpha = 0.75f),
-                                                    modifier = Modifier.padding(top = 24.dp)
+                                                    modifier = Modifier.padding(top = 20.dp)
                                                 )
                                             }
                                         } else {
-                                            items(savedBooks, key = { it.id }) { book ->
+                                            items(visibleBooks, key = { it.id }) { book ->
+                                                val metaOrg = orgMetaMap[book.id]
+                                                val progressPct = (LibraryOrganizationManager.estimateBookProgress(context, book) * 100).toInt()
                                                 Card(
                                                     colors = CardDefaults.cardColors(containerColor = currentTheme.barBg),
                                                     modifier = Modifier
@@ -1165,11 +1541,25 @@ class MainActivity : ComponentActivity() {
                                                     ) {
                                                         Column(modifier = Modifier.weight(1f)) {
                                                             Text(book.title, fontWeight = FontWeight.Bold, color = currentTheme.text)
-                                                            Text("Formato: ${book.format}", fontSize = 12.sp, color = currentTheme.text.copy(alpha = 0.7f))
+                                                            Text(
+                                                                text = "${book.format} • ${metaOrg?.category ?: "A ler"} • $progressPct%",
+                                                                fontSize = 12.sp,
+                                                                color = currentTheme.text.copy(alpha = 0.7f)
+                                                            )
+                                                        }
+                                                        IconButton(onClick = { categoryTargetBook = book }) {
+                                                            Icon(Icons.Rounded.Label, contentDescription = "Categoria", tint = currentTheme.text)
+                                                        }
+                                                        IconButton(onClick = { requestSecretShelfAccess(book) }) {
+                                                            Icon(
+                                                                imageVector = if (metaOrg?.isSecret == true) Icons.Rounded.LockOpen else Icons.Rounded.Lock,
+                                                                contentDescription = "Estante secreta",
+                                                                tint = currentTheme.text
+                                                            )
                                                         }
                                                         IconButton(onClick = {
                                                             LibraryManager.deleteBook(context, book.id)
-                                                            savedBooks = LibraryManager.loadLibrary(context)
+                                                            refreshLibraryAndOrg()
                                                         }) {
                                                             Icon(Icons.Rounded.Delete, contentDescription = "Remover", tint = currentTheme.text)
                                                         }
@@ -1182,22 +1572,121 @@ class MainActivity : ComponentActivity() {
                             }
 
                             2 -> {
+                                val stats = StudyNotebookManager.computeStats(annotations)
                                 LazyColumn(
                                     modifier = Modifier
                                         .fillMaxSize()
                                         .background(currentTheme.bg)
                                         .padding(16.dp),
-                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                    verticalArrangement = Arrangement.spacedBy(12.dp)
                                 ) {
                                     item {
                                         Text("Caderno", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = currentTheme.text)
                                     }
+
+                                    item {
+                                        Card(
+                                            colors = CardDefaults.cardColors(containerColor = currentTheme.barBg),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                Text("Resumo de Estudo", fontWeight = FontWeight.Bold, color = currentTheme.text)
+                                                Text(
+                                                    text = "Total: ${stats.totalEntries} • Notas: ${stats.notesCount} • Destaques: ${stats.highlightsCount}",
+                                                    fontSize = 12.sp,
+                                                    color = currentTheme.text.copy(alpha = 0.8f)
+                                                )
+                                                Text(
+                                                    text = "Sublinhados: ${stats.underlinesCount} • Marcadores: ${stats.bookmarksCount} • Livros: ${stats.annotatedBooksCount}",
+                                                    fontSize = 12.sp,
+                                                    color = currentTheme.text.copy(alpha = 0.8f)
+                                                )
+                                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                    OutlinedButton(onClick = {
+                                                        val res = StudyNotebookManager.exportAnnotationsToFile(context, annotations)
+                                                        exportStatusMessage = if (res.isSuccess) {
+                                                            "Exportado: ${res.getOrNull()?.name}"
+                                                        } else {
+                                                            "Falha ao exportar."
+                                                        }
+                                                    }) {
+                                                        Text("Exportar .MD")
+                                                    }
+                                                    OutlinedButton(onClick = {
+                                                        val md = StudyNotebookManager.formatAnnotationsAsMarkdown(annotations)
+                                                        clipboard.setText(AnnotatedString(md))
+                                                        exportStatusMessage = "Caderno copiado para a área de transferência."
+                                                    }) {
+                                                        Text("Copiar resumo")
+                                                    }
+                                                }
+                                                if (exportStatusMessage != null) {
+                                                    Text(exportStatusMessage!!, fontSize = 12.sp, color = Color(0xFF4F46E5))
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    item {
+                                        Card(
+                                            colors = CardDefaults.cardColors(containerColor = currentTheme.barBg),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                Text("Dicionário e Tradutor Rápido", fontWeight = FontWeight.Bold, color = currentTheme.text)
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    OutlinedTextField(
+                                                        value = lookupQueryInput,
+                                                        onValueChange = { lookupQueryInput = it },
+                                                        label = { Text("Palavra ou expressão") },
+                                                        singleLine = true,
+                                                        modifier = Modifier.weight(1f)
+                                                    )
+                                                    Button(onClick = { openDictionaryOrTranslate(lookupQueryInput) }) {
+                                                        Text("Consultar")
+                                                    }
+                                                }
+                                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                    listOf("pt", "en", "es", "fr").forEach { langCode ->
+                                                        FilterChip(
+                                                            selected = translationTargetLang == langCode,
+                                                            onClick = { translationTargetLang = langCode },
+                                                            label = { Text("→ ${langCode.uppercase()}") }
+                                                        )
+                                                    }
+                                                }
+                                                if (lookupHistory.isNotEmpty()) {
+                                                    Text("Histórico recente:", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = currentTheme.text)
+                                                    lookupHistory.take(5).forEach { hist ->
+                                                        Row(
+                                                            modifier = Modifier
+                                                                .fillMaxWidth()
+                                                                .clickable {
+                                                                    lookupQueryInput = hist.query
+                                                                    openDictionaryOrTranslate(hist.query)
+                                                                }
+                                                                .padding(vertical = 4.dp),
+                                                            horizontalArrangement = Arrangement.SpaceBetween
+                                                        ) {
+                                                            Text(hist.query, fontSize = 13.sp, color = currentTheme.text)
+                                                            Text(hist.provider, fontSize = 11.sp, color = currentTheme.text.copy(alpha = 0.65f))
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
                                     if (annotations.isEmpty()) {
                                         item {
                                             Text(
                                                 text = "Ainda não tens notas ou destaques guardados.",
                                                 color = currentTheme.text.copy(alpha = 0.75f),
-                                                modifier = Modifier.padding(top = 24.dp)
+                                                modifier = Modifier.padding(top = 12.dp)
                                             )
                                         }
                                     } else {
@@ -1294,6 +1783,26 @@ class MainActivity : ComponentActivity() {
                                                     onClick = { barsBehaviorMode = barOption }
                                                 )
                                                 Text(barOption.label, color = currentTheme.text)
+                                            }
+                                        }
+                                    }
+                                    item {
+                                        Text("Estante secreta e segurança", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            OutlinedButton(onClick = {
+                                                pendingSecretBookToggle = null
+                                                secretPinInput = ""
+                                                secretPinError = null
+                                                showSecretPinDialog = true
+                                            }) {
+                                                Text(if (LibraryOrganizationManager.hasSecretPin(context)) "Alterar / Verificar PIN" else "Definir PIN")
+                                            }
+                                            OutlinedButton(onClick = {
+                                                LibraryOrganizationManager.lockSecretShelf(context)
+                                                showSecretShelf = false
+                                            }) {
+                                                Text("Bloquear estante")
                                             }
                                         }
                                     }
