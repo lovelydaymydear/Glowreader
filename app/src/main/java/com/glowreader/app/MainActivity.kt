@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.Voice
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -80,6 +81,14 @@ enum class LibraryLayoutMode(val label: String) {
     GRID("Grelha"),
     LIST("Lista"),
     COMPACT("Compacto")
+}
+
+private fun formatCleanBookTitle(rawTitle: String): String {
+    return rawTitle
+        .replace('_', ' ')
+        .replace(Regex("\\s+"), " ")
+        .trim()
+        .ifBlank { "Livro" }
 }
 
 class MainActivity : ComponentActivity() {
@@ -301,7 +310,7 @@ class MainActivity : ComponentActivity() {
                     useTranslatedText = false
                     translationProgressText = null
                     activeBookMeta = meta
-                    activeBookContent = loaded
+                    activeBookContent = loaded.copy(title = formatCleanBookTitle(loaded.title))
                     currentChapterIndex = meta.lastChapterIndex.coerceIn(0, (loaded.chapters.size - 1).coerceAtLeast(0))
                 }
             }
@@ -342,12 +351,13 @@ class MainActivity : ComponentActivity() {
                         WebImporter.importFromUrl(rawUrl)
                     }
                     if (result.success && result.book != null && result.book.chapters.isNotEmpty()) {
+                        val cleanedBook = result.book.copy(title = formatCleanBookTitle(result.book.title))
                         withContext(Dispatchers.IO) {
                             LibraryManager.saveBookToLibrary(
                                 context = context,
-                                parsed = result.book,
+                                parsed = cleanedBook,
                                 format = "WEB",
-                                coverBitmap = result.book.coverBitmap
+                                coverBitmap = cleanedBook.coverBitmap
                             )
                         }
                         refreshLibraryAndOrg()
@@ -362,6 +372,42 @@ class MainActivity : ComponentActivity() {
                         webImportError = result.errorMessage ?: "Não foi possível importar a página."
                         isImporting = false
                     }
+                }
+            }
+
+            val hasOverlayOpen = internalLookupUrl != null ||
+                pendingOpenBookMeta != null ||
+                showColorMixerDialog ||
+                showResearchHubDialog ||
+                showAddCategoryDialog ||
+                categoryTargetBook != null ||
+                showSecretPinDialog ||
+                showDuplicatesSheet ||
+                showWebImportDialog
+
+            BackHandler(enabled = activeBookContent == null && (hasOverlayOpen || showSecretShelf || currentTab != 0)) {
+                when {
+                    internalLookupUrl != null -> {
+                        internalLookupUrl = null
+                        internalLookupTitle = null
+                    }
+                    pendingOpenBookMeta != null -> pendingOpenBookMeta = null
+                    showColorMixerDialog -> showColorMixerDialog = false
+                    showResearchHubDialog -> showResearchHubDialog = false
+                    showAddCategoryDialog -> showAddCategoryDialog = false
+                    categoryTargetBook != null -> categoryTargetBook = null
+                    showSecretPinDialog -> {
+                        showSecretPinDialog = false
+                        pendingSecretBookToggle = null
+                    }
+                    showDuplicatesSheet -> showDuplicatesSheet = false
+                    showWebImportDialog && !isImporting -> {
+                        showWebImportDialog = false
+                        webImportError = null
+                        webImportStatus = null
+                    }
+                    showSecretShelf -> showSecretShelf = false
+                    currentTab != 0 -> currentTab = 0
                 }
             }
 
@@ -415,12 +461,13 @@ class MainActivity : ComponentActivity() {
                                     else -> "TXT"
                                 }
                             }
+                            val cleanedBook = parsedBook.copy(title = formatCleanBookTitle(parsedBook.title))
                             withContext(Dispatchers.IO) {
                                 LibraryManager.saveBookToLibrary(
                                     context = context,
-                                    parsed = parsedBook,
+                                    parsed = cleanedBook,
                                     format = format,
-                                    coverBitmap = parsedBook.coverBitmap
+                                    coverBitmap = cleanedBook.coverBitmap
                                 )
                             }
                             refreshLibraryAndOrg()
@@ -435,10 +482,11 @@ class MainActivity : ComponentActivity() {
 
             val bookToPromptReflow = pendingOpenBookMeta
             if (bookToPromptReflow != null) {
+                val cleanPromptTitle = formatCleanBookTitle(bookToPromptReflow.title)
                 val isPdf = bookToPromptReflow.format.equals("PDF", ignoreCase = true)
                 AlertDialog(
                     onDismissRequest = { pendingOpenBookMeta = null },
-                    title = { Text("Abrir: ${bookToPromptReflow.title}") },
+                    title = { Text("Abrir: $cleanPromptTitle", maxLines = 2, overflow = TextOverflow.Ellipsis) },
                     text = {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Text(
@@ -696,7 +744,7 @@ class MainActivity : ComponentActivity() {
                 val currentBookCat = orgMetaMap[bookForCat.id]?.category ?: "A ler"
                 AlertDialog(
                     onDismissRequest = { categoryTargetBook = null },
-                    title = { Text("Categoria — ${bookForCat.title}") },
+                    title = { Text("Categoria — ${formatCleanBookTitle(bookForCat.title)}", maxLines = 2, overflow = TextOverflow.Ellipsis) },
                     text = {
                         Column {
                             categories.forEach { cat ->
@@ -846,7 +894,7 @@ class MainActivity : ComponentActivity() {
                                     ) {
                                         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                             Text(
-                                                text = group.books.first().title,
+                                                text = formatCleanBookTitle(group.books.first().title),
                                                 fontWeight = FontWeight.Bold,
                                                 color = currentTheme.text
                                             )
@@ -1005,6 +1053,35 @@ class MainActivity : ComponentActivity() {
                 var draftNote by remember { mutableStateOf("") }
                 var draftUnderline by remember { mutableStateOf(false) }
                 var showStudyBanner by remember { mutableStateOf(false) }
+
+                fun closeReaderBackToLibrary() {
+                    stopAudio()
+                    ReaderLayoutController.applyFullscreenSystemBars(activity, false)
+                    LibraryManager.updateReadingProgress(context, currentMeta.id, currentChapterIndex, scrollState.value)
+                    refreshLibraryAndOrg()
+                    activeBookContent = null
+                    activeBookMeta = null
+                    currentTab = 1
+                }
+
+                BackHandler(enabled = true) {
+                    when {
+                        showColorMixerDialog -> showColorMixerDialog = false
+                        showNoteDialog -> showNoteDialog = false
+                        showTranslateSheet -> if (!isTranslating) showTranslateSheet = false
+                        showSavedAudioSheet -> showSavedAudioSheet = false
+                        showTypeSheet -> showTypeSheet = false
+                        showNotebookSheet -> showNotebookSheet = false
+                        showTocSheet -> showTocSheet = false
+                        showResearchHubDialog -> showResearchHubDialog = false
+                        internalLookupUrl != null -> {
+                            internalLookupUrl = null
+                            internalLookupTitle = null
+                        }
+                        showStudyBanner -> showStudyBanner = false
+                        else -> closeReaderBackToLibrary()
+                    }
+                }
 
                 DisposableEffect(currentChapterIndex) {
                     onDispose {
@@ -1504,14 +1581,7 @@ class MainActivity : ComponentActivity() {
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    IconButton(onClick = {
-                                        stopAudio()
-                                        ReaderLayoutController.applyFullscreenSystemBars(activity, false)
-                                        LibraryManager.updateReadingProgress(context, currentMeta.id, currentChapterIndex, scrollState.value)
-                                        refreshLibraryAndOrg()
-                                        activeBookContent = null
-                                        activeBookMeta = null
-                                    }) {
+                                    IconButton(onClick = { closeReaderBackToLibrary() }) {
                                         Icon(Icons.Rounded.ArrowBack, contentDescription = "Voltar", tint = currentTheme.text)
                                     }
                                     Column(modifier = Modifier.weight(1f)) {
@@ -1928,6 +1998,7 @@ class MainActivity : ComponentActivity() {
                 val recentMeta = remember(savedBooks, libraryVersion) { savedBooks.firstOrNull() }
                 val recentHomeBook = remember(recentMeta, libraryVersion) {
                     recentMeta?.let { meta ->
+                        val cleanTitle = formatCleanBookTitle(meta.title)
                         val content = LibraryManager.loadBookContent(context, meta.id)
                         val chTitle = content?.chapters?.getOrNull(meta.lastChapterIndex)?.title
                             ?: "Capítulo ${meta.lastChapterIndex + 1}"
@@ -1935,7 +2006,7 @@ class MainActivity : ComponentActivity() {
                         val prog = ((meta.lastChapterIndex + 1).toFloat() / totalCh.toFloat()).coerceIn(0f, 1f)
                         HomeRecentBook(
                             id = meta.id,
-                            title = meta.title,
+                            title = cleanTitle,
                             author = "${meta.format} • $chTitle",
                             chapterTitle = chTitle,
                             progressPercent = prog,
@@ -2040,6 +2111,7 @@ class MainActivity : ComponentActivity() {
 
                                     @Composable
                                     fun BookCardContent(book: SavedBookMeta, compact: Boolean) {
+                                        val cleanTitle = remember(book.title) { formatCleanBookTitle(book.title) }
                                         val metaOrg = orgMetaMap[book.id]
                                         val progressPct = (LibraryOrganizationManager.estimateBookProgress(context, book) * 100).toInt()
                                         val coverImageBitmap = remember(book.coverPath, book.id) {
@@ -2067,7 +2139,7 @@ class MainActivity : ComponentActivity() {
                                                     if (libraryLayoutMode == LibraryLayoutMode.GRID) {
                                                         Modifier
                                                             .fillMaxWidth()
-                                                            .height(225.dp)
+                                                            .height(232.dp)
                                                     } else if (compact) {
                                                         Modifier
                                                             .fillMaxWidth()
@@ -2085,7 +2157,7 @@ class MainActivity : ComponentActivity() {
                                             if (coverImageBitmap != null) {
                                                 Image(
                                                     bitmap = coverImageBitmap,
-                                                    contentDescription = book.title,
+                                                    contentDescription = cleanTitle,
                                                     contentScale = ContentScale.Crop,
                                                     modifier = Modifier.fillMaxSize()
                                                 )
@@ -2095,8 +2167,9 @@ class MainActivity : ComponentActivity() {
                                                         .background(
                                                             Brush.verticalGradient(
                                                                 colors = listOf(
-                                                                    Color.Black.copy(alpha = 0.25f),
-                                                                    Color.Black.copy(alpha = 0.72f)
+                                                                    Color.Black.copy(alpha = 0.08f),
+                                                                    Color.Black.copy(alpha = 0.22f),
+                                                                    Color.Black.copy(alpha = 0.84f)
                                                                 )
                                                             )
                                                         )
@@ -2107,7 +2180,7 @@ class MainActivity : ComponentActivity() {
                                                 Column(
                                                     modifier = Modifier
                                                         .fillMaxSize()
-                                                        .padding(12.dp),
+                                                        .padding(11.dp),
                                                     verticalArrangement = Arrangement.SpaceBetween
                                                 ) {
                                                     Row(
@@ -2117,7 +2190,7 @@ class MainActivity : ComponentActivity() {
                                                     ) {
                                                         Surface(
                                                             shape = RoundedCornerShape(8.dp),
-                                                            color = Color.Black.copy(alpha = 0.55f)
+                                                            color = Color.Black.copy(alpha = 0.65f)
                                                         ) {
                                                             Text(
                                                                 text = if (progressPct >= 100) "DONE" else "$progressPct%",
@@ -2127,21 +2200,28 @@ class MainActivity : ComponentActivity() {
                                                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                                             )
                                                         }
-                                                        Row {
+                                                        Row(
+                                                            modifier = Modifier
+                                                                .clip(RoundedCornerShape(10.dp))
+                                                                .background(Color.Black.copy(alpha = 0.55f))
+                                                                .padding(horizontal = 4.dp, vertical = 2.dp),
+                                                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                                        ) {
                                                             IconButton(
                                                                 onClick = { categoryTargetBook = book },
-                                                                modifier = Modifier.size(28.dp)
+                                                                modifier = Modifier.size(26.dp)
                                                             ) {
-                                                                Icon(Icons.Rounded.Label, contentDescription = "Categoria", tint = Color.White)
+                                                                Icon(Icons.Rounded.Label, contentDescription = "Categoria", tint = Color.White, modifier = Modifier.size(16.dp))
                                                             }
                                                             IconButton(
                                                                 onClick = { requestSecretShelfAccess(book) },
-                                                                modifier = Modifier.size(28.dp)
+                                                                modifier = Modifier.size(26.dp)
                                                             ) {
                                                                 Icon(
                                                                     imageVector = if (metaOrg?.isSecret == true) Icons.Rounded.LockOpen else Icons.Rounded.Lock,
                                                                     contentDescription = "Estante secreta",
-                                                                    tint = Color.White
+                                                                    tint = Color.White,
+                                                                    modifier = Modifier.size(16.dp)
                                                                 )
                                                             }
                                                         }
@@ -2149,9 +2229,9 @@ class MainActivity : ComponentActivity() {
 
                                                     Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                                                         Text(
-                                                            text = book.title,
+                                                            text = cleanTitle,
                                                             fontWeight = FontWeight.Bold,
-                                                            fontSize = 15.sp,
+                                                            fontSize = 14.sp,
                                                             color = Color.White,
                                                             maxLines = 2,
                                                             overflow = TextOverflow.Ellipsis
@@ -2159,7 +2239,7 @@ class MainActivity : ComponentActivity() {
                                                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                                             Surface(
                                                                 shape = RoundedCornerShape(6.dp),
-                                                                color = Color.Black.copy(alpha = 0.48f)
+                                                                color = Color.Black.copy(alpha = 0.62f)
                                                             ) {
                                                                 Text(
                                                                     text = book.format,
@@ -2171,7 +2251,7 @@ class MainActivity : ComponentActivity() {
                                                             }
                                                             Surface(
                                                                 shape = RoundedCornerShape(6.dp),
-                                                                color = Color.Black.copy(alpha = 0.48f)
+                                                                color = Color.Black.copy(alpha = 0.62f)
                                                             ) {
                                                                 Text(
                                                                     text = metaOrg?.category ?: "A ler",
@@ -2202,7 +2282,7 @@ class MainActivity : ComponentActivity() {
                                                                 },
                                                                 modifier = Modifier.size(28.dp)
                                                             ) {
-                                                                Icon(Icons.Rounded.Delete, contentDescription = "Remover", tint = Color.White.copy(alpha = 0.85f))
+                                                                Icon(Icons.Rounded.Delete, contentDescription = "Remover", tint = Color.White.copy(alpha = 0.9f), modifier = Modifier.size(18.dp))
                                                             }
                                                         }
                                                     }
@@ -2225,7 +2305,7 @@ class MainActivity : ComponentActivity() {
                                                         if (coverImageBitmap != null) {
                                                             Image(
                                                                 bitmap = coverImageBitmap,
-                                                                contentDescription = book.title,
+                                                                contentDescription = cleanTitle,
                                                                 contentScale = ContentScale.Crop,
                                                                 modifier = Modifier.fillMaxSize()
                                                             )
@@ -2241,7 +2321,7 @@ class MainActivity : ComponentActivity() {
                                                     Spacer(modifier = Modifier.width(10.dp))
                                                     Column(modifier = Modifier.weight(1f)) {
                                                         Text(
-                                                            text = book.title,
+                                                            text = cleanTitle,
                                                             fontWeight = FontWeight.Bold,
                                                             fontSize = if (compact) 14.sp else 15.sp,
                                                             color = Color.White,
@@ -2298,7 +2378,7 @@ class MainActivity : ComponentActivity() {
                                                     overflow = TextOverflow.Ellipsis,
                                                     modifier = Modifier.weight(1f)
                                                 )
-                                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                                     IconButton(onClick = {
                                                         libraryLayoutMode = when (libraryLayoutMode) {
                                                             LibraryLayoutMode.GRID -> LibraryLayoutMode.LIST
@@ -2338,17 +2418,23 @@ class MainActivity : ComponentActivity() {
                                                             tint = currentTheme.text
                                                         )
                                                     }
-                                                    FilledTonalButton(onClick = { showWebImportDialog = true }) {
-                                                        Icon(Icons.Rounded.Language, contentDescription = null)
+                                                    FilledTonalButton(
+                                                        onClick = { showWebImportDialog = true },
+                                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                                                    ) {
+                                                        Icon(Icons.Rounded.Language, contentDescription = null, modifier = Modifier.size(16.dp))
                                                         Spacer(modifier = Modifier.width(4.dp))
-                                                        Text("URL", maxLines = 1, softWrap = false)
+                                                        Text("URL", fontSize = 12.sp, maxLines = 1, softWrap = false)
                                                     }
-                                                    Button(onClick = {
-                                                        filePicker.launch(arrayOf("application/epub+zip", "application/pdf", "text/plain"))
-                                                    }) {
-                                                        Icon(Icons.Rounded.Add, contentDescription = null)
+                                                    Button(
+                                                        onClick = {
+                                                            filePicker.launch(arrayOf("application/epub+zip", "application/pdf", "text/plain"))
+                                                        },
+                                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                                                    ) {
+                                                        Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(16.dp))
                                                         Spacer(modifier = Modifier.width(4.dp))
-                                                        Text("Ficheiro", maxLines = 1, softWrap = false)
+                                                        Text("Ficheiro", fontSize = 12.sp, maxLines = 1, softWrap = false)
                                                     }
                                                 }
                                             }
@@ -2638,7 +2724,7 @@ class MainActivity : ComponentActivity() {
                                                     verticalAlignment = Alignment.Top
                                                 ) {
                                                     Column(modifier = Modifier.weight(1f)) {
-                                                        Text(ann.bookTitle, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = currentTheme.text)
+                                                        Text(formatCleanBookTitle(ann.bookTitle), fontWeight = FontWeight.Bold, fontSize = 14.sp, color = currentTheme.text)
                                                         if (ann.selectedText.isNotBlank()) {
                                                             Text(ann.selectedText, fontSize = 13.sp, color = currentTheme.text.copy(alpha = 0.85f))
                                                         }
