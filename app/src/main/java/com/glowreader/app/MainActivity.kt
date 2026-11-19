@@ -50,7 +50,9 @@ import androidx.compose.ui.platform.TextToolbarStatus
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -62,19 +64,25 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.Locale
 
+private val GlowMintAccent = Color(0xFF4CA69E)
+private val GlowMintBright = Color(0xFF52B788)
+private val GlowDeepForest = Color(0xFF0E1D17)
+private val GlowForestSurface = Color(0xFF162B23)
+
 enum class ReaderTheme(
     val label: String,
     val bg: Color,
     val text: Color,
     val highlightBg: Color,
     val highlightText: Color,
-    val barBg: Color
+    val barBg: Color,
+    val accent: Color
 ) {
-    LIGHT("Claro", Color(0xFFFAFAFA), Color(0xFF1E1E1E), Color(0xFFFFE082), Color(0xFF000000), Color(0xFFFFFFFF)),
-    SEPIA("Sépia", Color(0xFFF4ECD8), Color(0xFF3E3224), Color(0xFFE6C27A), Color(0xFF1F1810), Color(0xFFEBE0C5)),
-    DARK("Escuro", Color(0xFF121212), Color(0xFFE0E0E0), Color(0xFF3B4CCA), Color(0xFFFFFFFF), Color(0xFF1E1E1E)),
-    FOREST("Theme Verde", Color(0xFF0E1D17), Color(0xFFE6EFEA), Color(0xFF2D6A56), Color(0xFFFFFFFF), Color(0xFF162B23)),
-    PAPYRUS("Papyrus", Color(0xFFF3E6C8), Color(0xFF2C2318), Color(0xFFD9B670), Color(0xFF1A140C), Color(0xFFE8D8B5))
+    FOREST("Theme Verde", GlowDeepForest, Color(0xFFE6EFEA), Color(0xFF2D6A56), Color(0xFFFFFFFF), GlowForestSurface, GlowMintAccent),
+    DARK("Escuro", Color(0xFF121212), Color(0xFFE6E8E7), Color(0xFF2B4C45), Color(0xFFFFFFFF), Color(0xFF1C211F), GlowMintBright),
+    SEPIA("Sépia", Color(0xFFF4ECD8), Color(0xFF3E3224), Color(0xFFE6C27A), Color(0xFF1F1810), Color(0xFFEBE0C5), Color(0xFF3B7A6B)),
+    PAPYRUS("Papyrus", Color(0xFFF3E6C8), Color(0xFF2C2318), Color(0xFFD9B670), Color(0xFF1A140C), Color(0xFFE8D8B5), Color(0xFF3A7366)),
+    LIGHT("Claro", Color(0xFFF6F8F7), Color(0xFF1A221F), Color(0xFFB7E4C7), Color(0xFF081C15), Color(0xFFFFFFFF), Color(0xFF2D6A4F))
 }
 
 enum class LibraryLayoutMode(val label: String) {
@@ -106,10 +114,12 @@ class MainActivity : ComponentActivity() {
             val voiceEngine = remember(context) { VoiceEngineManager(context) }
 
             var currentTab by remember { mutableIntStateOf(0) }
-            var currentTheme by remember { mutableStateOf(ReaderTheme.SEPIA) }
+            var currentTheme by remember { mutableStateOf(ReaderTheme.FOREST) }
             var fontSize by remember { mutableFloatStateOf(19f) }
             var currentFont by remember { mutableStateOf(ReaderFont.SERIF) }
-            var currentAlign by remember { mutableStateOf(ReaderAlignment.JUSTIFY) }
+            var currentAlign by remember { mutableStateOf(ReaderAlignment.LEFT) }
+            var lineHeightMultiplier by remember { mutableFloatStateOf(1.62f) }
+            var horizontalPaddingDp by remember { mutableIntStateOf(22) }
 
             var libraryLayoutMode by remember { mutableStateOf(LibraryLayoutMode.GRID) }
             var libraryVersion by remember { mutableIntStateOf(0) }
@@ -486,7 +496,15 @@ class MainActivity : ComponentActivity() {
                 val isPdf = bookToPromptReflow.format.equals("PDF", ignoreCase = true)
                 AlertDialog(
                     onDismissRequest = { pendingOpenBookMeta = null },
-                    title = { Text("Abrir: $cleanPromptTitle", maxLines = 2, overflow = TextOverflow.Ellipsis) },
+                    containerColor = currentTheme.barBg,
+                    title = {
+                        Text(
+                            text = "Abrir: $cleanPromptTitle",
+                            color = currentTheme.text,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    },
                     text = {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Text(
@@ -495,11 +513,13 @@ class MainActivity : ComponentActivity() {
                                 } else {
                                     "Escolhe como queres apresentar este livro ao abrir:"
                                 },
+                                color = currentTheme.text.copy(alpha = 0.85f),
                                 fontSize = 13.sp
                             )
                             ReflowMode.entries.forEach { mode ->
                                 val isRecommended = isPdf && mode == ReflowMode.AUTO_ADAPT
                                 Card(
+                                    colors = CardDefaults.cardColors(containerColor = currentTheme.bg),
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clickable {
@@ -512,26 +532,30 @@ class MainActivity : ComponentActivity() {
                                         Text(
                                             text = if (isRecommended) "${mode.label} (Recomendado PDF)" else mode.label,
                                             fontWeight = FontWeight.Bold,
+                                            color = currentTheme.accent,
                                             fontSize = 14.sp
                                         )
-                                        Text(mode.description, fontSize = 12.sp)
+                                        Text(mode.description, color = currentTheme.text.copy(alpha = 0.8f), fontSize = 12.sp)
                                     }
                                 }
                             }
                         }
                     },
                     confirmButton = {
-                        Button(onClick = {
-                            val target = bookToPromptReflow
-                            pendingOpenBookMeta = null
-                            launchBookWithReflow(target, defaultReflowMode)
-                        }) {
+                        Button(
+                            colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color.White),
+                            onClick = {
+                                val target = bookToPromptReflow
+                                pendingOpenBookMeta = null
+                                launchBookWithReflow(target, defaultReflowMode)
+                            }
+                        ) {
                             Text("Abrir padrão", maxLines = 1, softWrap = false)
                         }
                     },
                     dismissButton = {
                         TextButton(onClick = { pendingOpenBookMeta = null }) {
-                            Text("Cancelar", maxLines = 1, softWrap = false)
+                            Text("Cancelar", color = currentTheme.text, maxLines = 1, softWrap = false)
                         }
                     }
                 )
@@ -543,7 +567,8 @@ class MainActivity : ComponentActivity() {
 
                 AlertDialog(
                     onDismissRequest = { showColorMixerDialog = false },
-                    title = { Text("Criar ou Misturar Cor de Destaque") },
+                    containerColor = currentTheme.barBg,
+                    title = { Text("Criar ou Misturar Cor de Destaque", color = currentTheme.text) },
                     text = {
                         Column(
                             modifier = Modifier.verticalScroll(rememberScrollState()),
@@ -557,7 +582,7 @@ class MainActivity : ComponentActivity() {
                                 modifier = Modifier.fillMaxWidth()
                             )
 
-                            Text("Mistura de duas cores:", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            Text("Mistura de duas cores:", color = currentTheme.text, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                             Row(
                                 modifier = Modifier.horizontalScroll(rememberScrollState()),
                                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -575,11 +600,11 @@ class MainActivity : ComponentActivity() {
                                             .size(28.dp)
                                             .clip(CircleShape)
                                             .background(c)
-                                            .border(2.dp, if (mixColorA == c) Color.Black else Color.Transparent, CircleShape)
+                                            .border(2.dp, if (mixColorA == c) currentTheme.accent else Color.Transparent, CircleShape)
                                             .clickable { mixColorA = c }
                                     )
                                 }
-                                Text("+", fontWeight = FontWeight.Bold)
+                                Text("+", color = currentTheme.text, fontWeight = FontWeight.Bold)
                                 listOf(
                                     Color(0xFF81D4FA),
                                     Color(0xFFCE93D8),
@@ -591,20 +616,20 @@ class MainActivity : ComponentActivity() {
                                             .size(28.dp)
                                             .clip(CircleShape)
                                             .background(c)
-                                            .border(2.dp, if (mixColorB == c) Color.Black else Color.Transparent, CircleShape)
+                                            .border(2.dp, if (mixColorB == c) currentTheme.accent else Color.Transparent, CircleShape)
                                             .clickable { mixColorB = c }
                                     )
                                 }
                             }
-                            Text("Proporção da mistura: ${(mixRatio * 100).toInt()}%", fontSize = 11.sp)
+                            Text("Proporção da mistura: ${(mixRatio * 100).toInt()}%", color = currentTheme.text, fontSize = 11.sp)
                             Slider(value = mixRatio, onValueChange = { mixRatio = it })
 
-                            Text("Ajuste fino RGB:", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                            Text("Vermelho: ${rgbRed.toInt()}", fontSize = 11.sp)
+                            Text("Ajuste fino RGB:", color = currentTheme.text, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            Text("Vermelho: ${rgbRed.toInt()}", color = currentTheme.text, fontSize = 11.sp)
                             Slider(value = rgbRed, onValueChange = { rgbRed = it }, valueRange = 0f..255f)
-                            Text("Verde: ${rgbGreen.toInt()}", fontSize = 11.sp)
+                            Text("Verde: ${rgbGreen.toInt()}", color = currentTheme.text, fontSize = 11.sp)
                             Slider(value = rgbGreen, onValueChange = { rgbGreen = it }, valueRange = 0f..255f)
-                            Text("Azul: ${rgbBlue.toInt()}", fontSize = 11.sp)
+                            Text("Azul: ${rgbBlue.toInt()}", color = currentTheme.text, fontSize = 11.sp)
                             Slider(value = rgbBlue, onValueChange = { rgbBlue = it }, valueRange = 0f..255f)
 
                             Row(
@@ -618,7 +643,7 @@ class MainActivity : ComponentActivity() {
                                         .background(mixedPreview)
                                         .border(1.dp, Color.Gray, RoundedCornerShape(8.dp))
                                 )
-                                Text("Mistura", fontSize = 12.sp, maxLines = 1, softWrap = false)
+                                Text("Mistura", color = currentTheme.text, fontSize = 12.sp, maxLines = 1, softWrap = false)
                                 Box(
                                     modifier = Modifier
                                         .size(36.dp)
@@ -626,7 +651,7 @@ class MainActivity : ComponentActivity() {
                                         .background(rgbPreview)
                                         .border(1.dp, Color.Gray, RoundedCornerShape(8.dp))
                                 )
-                                Text("RGB", fontSize = 12.sp, maxLines = 1, softWrap = false)
+                                Text("RGB", color = currentTheme.text, fontSize = 12.sp, maxLines = 1, softWrap = false)
                             }
                         }
                     },
@@ -643,26 +668,29 @@ class MainActivity : ComponentActivity() {
                                 newCustomColorName = ""
                                 showColorMixerDialog = false
                             }) {
-                                Text("Guardar RGB", maxLines = 1, softWrap = false)
+                                Text("Guardar RGB", color = currentTheme.accent, maxLines = 1, softWrap = false)
                             }
-                            Button(onClick = {
-                                val savedList = ReadingEnhancementManager.saveCustomColor(
-                                    context,
-                                    newCustomColorName.ifBlank { "Mistura Guardada" },
-                                    mixedPreview
-                                )
-                                customColors = savedList
-                                savedList.firstOrNull()?.let { selectedColorKey = it.id }
-                                newCustomColorName = ""
-                                showColorMixerDialog = false
-                            }) {
+                            Button(
+                                colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color.White),
+                                onClick = {
+                                    val savedList = ReadingEnhancementManager.saveCustomColor(
+                                        context,
+                                        newCustomColorName.ifBlank { "Mistura Guardada" },
+                                        mixedPreview
+                                    )
+                                    customColors = savedList
+                                    savedList.firstOrNull()?.let { selectedColorKey = it.id }
+                                    newCustomColorName = ""
+                                    showColorMixerDialog = false
+                                }
+                            ) {
                                 Text("Guardar Mistura", maxLines = 1, softWrap = false)
                             }
                         }
                     },
                     dismissButton = {
                         TextButton(onClick = { showColorMixerDialog = false }) {
-                            Text("Cancelar", maxLines = 1, softWrap = false)
+                            Text("Cancelar", color = currentTheme.text, maxLines = 1, softWrap = false)
                         }
                     }
                 )
@@ -671,11 +699,13 @@ class MainActivity : ComponentActivity() {
             if (showResearchHubDialog) {
                 AlertDialog(
                     onDismissRequest = { showResearchHubDialog = false },
-                    title = { Text("Pesquisa, IA, Dicionário e Tradutor") },
+                    containerColor = currentTheme.barBg,
+                    title = { Text("Pesquisa, IA, Dicionário e Tradutor", color = currentTheme.text) },
                     text = {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Text(
                                 text = "Abre qualquer ferramenta diretamente dentro do GlowReader sem sair da leitura:",
+                                color = currentTheme.text.copy(alpha = 0.8f),
                                 fontSize = 12.sp
                             )
                             OutlinedTextField(
@@ -693,14 +723,14 @@ class MainActivity : ComponentActivity() {
                                     },
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Text(target.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(target.label, color = currentTheme.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                             }
                         }
                     },
                     confirmButton = {
                         TextButton(onClick = { showResearchHubDialog = false }) {
-                            Text("Fechar", maxLines = 1, softWrap = false)
+                            Text("Fechar", color = currentTheme.accent, maxLines = 1, softWrap = false)
                         }
                     }
                 )
@@ -709,7 +739,8 @@ class MainActivity : ComponentActivity() {
             if (showAddCategoryDialog) {
                 AlertDialog(
                     onDismissRequest = { showAddCategoryDialog = false },
-                    title = { Text("Nova categoria") },
+                    containerColor = currentTheme.barBg,
+                    title = { Text("Nova categoria", color = currentTheme.text) },
                     text = {
                         OutlinedTextField(
                             value = newCategoryName,
@@ -720,20 +751,23 @@ class MainActivity : ComponentActivity() {
                         )
                     },
                     confirmButton = {
-                        Button(onClick = {
-                            if (newCategoryName.isNotBlank()) {
-                                categories = LibraryOrganizationManager.addCustomCategory(context, newCategoryName)
-                                selectedCategory = newCategoryName.trim()
-                                newCategoryName = ""
+                        Button(
+                            colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color.White),
+                            onClick = {
+                                if (newCategoryName.isNotBlank()) {
+                                    categories = LibraryOrganizationManager.addCustomCategory(context, newCategoryName)
+                                    selectedCategory = newCategoryName.trim()
+                                    newCategoryName = ""
+                                }
+                                showAddCategoryDialog = false
                             }
-                            showAddCategoryDialog = false
-                        }) {
+                        ) {
                             Text("Criar", maxLines = 1, softWrap = false)
                         }
                     },
                     dismissButton = {
                         TextButton(onClick = { showAddCategoryDialog = false }) {
-                            Text("Cancelar", maxLines = 1, softWrap = false)
+                            Text("Cancelar", color = currentTheme.text, maxLines = 1, softWrap = false)
                         }
                     }
                 )
@@ -744,7 +778,15 @@ class MainActivity : ComponentActivity() {
                 val currentBookCat = orgMetaMap[bookForCat.id]?.category ?: "A ler"
                 AlertDialog(
                     onDismissRequest = { categoryTargetBook = null },
-                    title = { Text("Categoria — ${formatCleanBookTitle(bookForCat.title)}", maxLines = 2, overflow = TextOverflow.Ellipsis) },
+                    containerColor = currentTheme.barBg,
+                    title = {
+                        Text(
+                            text = "Categoria — ${formatCleanBookTitle(bookForCat.title)}",
+                            color = currentTheme.text,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    },
                     text = {
                         Column {
                             categories.forEach { cat ->
@@ -765,14 +807,14 @@ class MainActivity : ComponentActivity() {
                                             categoryTargetBook = null
                                         }
                                     )
-                                    Text(cat)
+                                    Text(cat, color = currentTheme.text)
                                 }
                             }
                         }
                     },
                     confirmButton = {
                         TextButton(onClick = { categoryTargetBook = null }) {
-                            Text("Fechar", maxLines = 1, softWrap = false)
+                            Text("Fechar", color = currentTheme.accent, maxLines = 1, softWrap = false)
                         }
                     }
                 )
@@ -785,8 +827,12 @@ class MainActivity : ComponentActivity() {
                         showSecretPinDialog = false
                         pendingSecretBookToggle = null
                     },
+                    containerColor = currentTheme.barBg,
                     title = {
-                        Text(if (pinAlreadySet) "Desbloquear estante secreta" else "Definir PIN da estante secreta")
+                        Text(
+                            text = if (pinAlreadySet) "Desbloquear estante secreta" else "Definir PIN da estante secreta",
+                            color = currentTheme.text
+                        )
                     },
                     text = {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -796,6 +842,7 @@ class MainActivity : ComponentActivity() {
                                 } else {
                                     "Cria um PIN de pelo menos 4 dígitos para proteger os teus livros privados."
                                 },
+                                color = currentTheme.text.copy(alpha = 0.85f),
                                 fontSize = 13.sp
                             )
                             OutlinedTextField(
@@ -814,35 +861,38 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                     confirmButton = {
-                        Button(onClick = {
-                            if (pinAlreadySet) {
-                                if (LibraryOrganizationManager.verifySecretPin(context, secretPinInput)) {
-                                    val toggleTarget = pendingSecretBookToggle
-                                    if (toggleTarget != null) {
-                                        orgMetaMap = LibraryOrganizationManager.toggleBookSecret(context, toggleTarget.id)
+                        Button(
+                            colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color.White),
+                            onClick = {
+                                if (pinAlreadySet) {
+                                    if (LibraryOrganizationManager.verifySecretPin(context, secretPinInput)) {
+                                        val toggleTarget = pendingSecretBookToggle
+                                        if (toggleTarget != null) {
+                                            orgMetaMap = LibraryOrganizationManager.toggleBookSecret(context, toggleTarget.id)
+                                        } else {
+                                            showSecretShelf = true
+                                        }
+                                        pendingSecretBookToggle = null
+                                        showSecretPinDialog = false
                                     } else {
-                                        showSecretShelf = true
+                                        secretPinError = "PIN incorreto."
                                     }
-                                    pendingSecretBookToggle = null
-                                    showSecretPinDialog = false
                                 } else {
-                                    secretPinError = "PIN incorreto."
-                                }
-                            } else {
-                                if (LibraryOrganizationManager.setSecretPin(context, secretPinInput)) {
-                                    val toggleTarget = pendingSecretBookToggle
-                                    if (toggleTarget != null) {
-                                        orgMetaMap = LibraryOrganizationManager.toggleBookSecret(context, toggleTarget.id)
+                                    if (LibraryOrganizationManager.setSecretPin(context, secretPinInput)) {
+                                        val toggleTarget = pendingSecretBookToggle
+                                        if (toggleTarget != null) {
+                                            orgMetaMap = LibraryOrganizationManager.toggleBookSecret(context, toggleTarget.id)
+                                        } else {
+                                            showSecretShelf = true
+                                        }
+                                        pendingSecretBookToggle = null
+                                        showSecretPinDialog = false
                                     } else {
-                                        showSecretShelf = true
+                                        secretPinError = "Usa pelo menos 4 caracteres."
                                     }
-                                    pendingSecretBookToggle = null
-                                    showSecretPinDialog = false
-                                } else {
-                                    secretPinError = "Usa pelo menos 4 caracteres."
                                 }
                             }
-                        }) {
+                        ) {
                             Text("Confirmar", maxLines = 1, softWrap = false)
                         }
                     },
@@ -851,7 +901,7 @@ class MainActivity : ComponentActivity() {
                             showSecretPinDialog = false
                             pendingSecretBookToggle = null
                         }) {
-                            Text("Cancelar", maxLines = 1, softWrap = false)
+                            Text("Cancelar", color = currentTheme.text, maxLines = 1, softWrap = false)
                         }
                     }
                 )
@@ -936,11 +986,13 @@ class MainActivity : ComponentActivity() {
                             webImportStatus = null
                         }
                     },
-                    title = { Text("Importar página da web") },
+                    containerColor = currentTheme.barBg,
+                    title = { Text("Importar página da web", color = currentTheme.text) },
                     text = {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Text(
                                 text = "Cola o link de um artigo, capítulo ou página web em português para extrair o texto e guardar na biblioteca.",
+                                color = currentTheme.text.copy(alpha = 0.85f),
                                 fontSize = 13.sp
                             )
                             OutlinedTextField(
@@ -959,8 +1011,8 @@ class MainActivity : ComponentActivity() {
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                                    Text(webImportStatus!!, fontSize = 12.sp)
+                                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = currentTheme.accent)
+                                    Text(webImportStatus!!, color = currentTheme.text, fontSize = 12.sp)
                                 }
                             }
                             if (webImportError != null) {
@@ -974,6 +1026,7 @@ class MainActivity : ComponentActivity() {
                     },
                     confirmButton = {
                         Button(
+                            colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color.White),
                             onClick = { triggerWebImport(webUrlInput) },
                             enabled = !isImporting && webUrlInput.isNotBlank()
                         ) {
@@ -989,7 +1042,7 @@ class MainActivity : ComponentActivity() {
                             },
                             enabled = !isImporting
                         ) {
-                            Text("Cancelar", maxLines = 1, softWrap = false)
+                            Text("Cancelar", color = currentTheme.text, maxLines = 1, softWrap = false)
                         }
                     }
                 )
@@ -1141,6 +1194,7 @@ class MainActivity : ComponentActivity() {
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 Button(
+                                    colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color.White),
                                     onClick = {
                                         isTranslating = true
                                         translationProgressText = "A traduzir capítulo atual..."
@@ -1187,7 +1241,7 @@ class MainActivity : ComponentActivity() {
                                     },
                                     enabled = !isTranslating
                                 ) {
-                                    Text("Traduzir livro todo", maxLines = 1, softWrap = false)
+                                    Text("Traduzir livro todo", color = currentTheme.text, maxLines = 1, softWrap = false)
                                 }
                             }
                             if (translatedChaptersMap.isNotEmpty()) {
@@ -1201,7 +1255,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                             if (translationProgressText != null) {
-                                Text(translationProgressText!!, fontSize = 12.sp, color = Color(0xFF4F46E5))
+                                Text(translationProgressText!!, fontSize = 12.sp, color = currentTheme.accent)
                             }
                             Spacer(modifier = Modifier.height(20.dp))
                         }
@@ -1231,6 +1285,7 @@ class MainActivity : ComponentActivity() {
                                 color = currentTheme.text.copy(alpha = 0.75f)
                             )
                             Button(
+                                colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color.White),
                                 onClick = {
                                     isExportingAudio = true
                                     audioStatusMessage = "A gerar áudio sincronizado..."
@@ -1268,7 +1323,7 @@ class MainActivity : ComponentActivity() {
                                     text = audioStatusMessage!!,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Medium,
-                                    color = Color(0xFF4F46E5)
+                                    color = currentTheme.accent
                                 )
                             }
 
@@ -1316,7 +1371,7 @@ class MainActivity : ComponentActivity() {
                                                         onPlaybackState = { isPlaying = it }
                                                     )
                                                 }) {
-                                                    Icon(Icons.Rounded.PlayArrow, contentDescription = "Ouvir sincronizado", tint = Color(0xFF4F46E5))
+                                                    Icon(Icons.Rounded.PlayArrow, contentDescription = "Ouvir sincronizado", tint = currentTheme.accent)
                                                 }
                                             }
                                         }
@@ -1329,16 +1384,129 @@ class MainActivity : ComponentActivity() {
                 }
 
                 if (showTypeSheet) {
-                    TypographySheet(
-                        theme = currentTheme,
-                        fontSize = fontSize,
-                        onFontSizeChange = { fontSize = it },
-                        currentFont = currentFont,
-                        onFontChange = { currentFont = it },
-                        currentAlign = currentAlign,
-                        onAlignChange = { currentAlign = it },
-                        onDismiss = { showTypeSheet = false }
-                    )
+                    ModalBottomSheet(
+                        onDismissRequest = { showTypeSheet = false },
+                        containerColor = currentTheme.barBg
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .verticalScroll(rememberScrollState())
+                                .padding(horizontal = 20.dp, vertical = 10.dp),
+                            verticalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            Text(
+                                text = "Aparência e Leitura",
+                                fontFamily = FontFamily.Serif,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 20.sp,
+                                color = currentTheme.text
+                            )
+
+                            Text("Tema da página", fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = currentTheme.text)
+                            Row(
+                                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                ReaderTheme.entries.forEach { t ->
+                                    val selected = currentTheme == t
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = t.bg,
+                                        modifier = Modifier
+                                            .size(width = 76.dp, height = 54.dp)
+                                            .border(
+                                                width = if (selected) 2.dp else 1.dp,
+                                                color = if (selected) currentTheme.accent else t.text.copy(alpha = 0.25f),
+                                                shape = RoundedCornerShape(12.dp)
+                                            )
+                                            .clickable { currentTheme = t }
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.fillMaxSize().padding(6.dp),
+                                            verticalArrangement = Arrangement.SpaceBetween,
+                                            horizontalAlignment = Alignment.CenterHorizontally
+                                        ) {
+                                            Text("Aa", fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold, color = t.text, fontSize = 15.sp)
+                                            Text(t.label.uppercase(), color = t.text.copy(alpha = 0.8f), fontSize = 9.sp, maxLines = 1, softWrap = false)
+                                        }
+                                    }
+                                }
+                            }
+
+                            Text("Tamanho do texto (${fontSize.toInt()} sp)", fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = currentTheme.text)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                OutlinedButton(onClick = { fontSize = (fontSize - 1f).coerceIn(13f, 32f) }) {
+                                    Text("A-", maxLines = 1, softWrap = false)
+                                }
+                                Slider(
+                                    value = fontSize,
+                                    onValueChange = { fontSize = it },
+                                    valueRange = 13f..32f,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                OutlinedButton(onClick = { fontSize = (fontSize + 1f).coerceIn(13f, 32f) }) {
+                                    Text("A+", maxLines = 1, softWrap = false)
+                                }
+                            }
+
+                            Text("Tipo de fonte", fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = currentTheme.text)
+                            Row(
+                                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                ReaderFont.entries.forEach { f ->
+                                    FilterChip(
+                                        selected = currentFont == f,
+                                        onClick = { currentFont = f },
+                                        label = { Text(f.label, maxLines = 1, softWrap = false) }
+                                    )
+                                }
+                            }
+
+                            Text("Alinhamento do texto", fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = currentTheme.text)
+                            Row(
+                                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                ReaderAlignment.entries.forEach { al ->
+                                    FilterChip(
+                                        selected = currentAlign == al,
+                                        onClick = { currentAlign = al },
+                                        label = { Text(al.label, maxLines = 1, softWrap = false) }
+                                    )
+                                }
+                            }
+
+                            Text("Espaçamento entre linhas", fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = currentTheme.text)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                listOf(1.38f to "Compacto", 1.62f to "Normal", 1.88f to "Confortável").forEach { (mult, lbl) ->
+                                    FilterChip(
+                                        selected = kotlin.math.abs(lineHeightMultiplier - mult) < 0.05f,
+                                        onClick = { lineHeightMultiplier = mult },
+                                        label = { Text(lbl, maxLines = 1, softWrap = false) }
+                                    )
+                                }
+                            }
+
+                            Text("Margens laterais", fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = currentTheme.text)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                listOf(14 to "Estreita", 22 to "Normal", 32 to "Ampla").forEach { (pad, lbl) ->
+                                    FilterChip(
+                                        selected = horizontalPaddingDp == pad,
+                                        onClick = { horizontalPaddingDp = pad },
+                                        label = { Text(lbl, maxLines = 1, softWrap = false) }
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(20.dp))
+                        }
+                    }
                 }
 
                 if (showNotebookSheet) {
@@ -1364,7 +1532,8 @@ class MainActivity : ComponentActivity() {
                     val paletteList = ReadingEnhancementManager.presetPaletteColors + customColors
                     AlertDialog(
                         onDismissRequest = { showNoteDialog = false },
-                        title = { Text("Destacar, Sublinhar ou Anotar") },
+                        containerColor = currentTheme.barBg,
+                        title = { Text("Destacar, Sublinhar ou Anotar", color = currentTheme.text) },
                         text = {
                             Column(
                                 modifier = Modifier.verticalScroll(rememberScrollState()),
@@ -1382,9 +1551,9 @@ class MainActivity : ComponentActivity() {
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text("Paleta de cores:", fontSize = 13.sp, maxLines = 1, softWrap = false)
+                                    Text("Paleta de cores:", color = currentTheme.text, fontSize = 13.sp, maxLines = 1, softWrap = false)
                                     TextButton(onClick = { showColorMixerDialog = true }) {
-                                        Text("+ Misturar / Criar", maxLines = 1, softWrap = false)
+                                        Text("+ Misturar / Criar", color = currentTheme.accent, maxLines = 1, softWrap = false)
                                     }
                                 }
                                 Row(
@@ -1402,7 +1571,7 @@ class MainActivity : ComponentActivity() {
                                                 .background(paletteItem.toComposeColor())
                                                 .border(
                                                     width = if (isSelected) 3.dp else 1.dp,
-                                                    color = if (isSelected) Color.Black else Color.Gray,
+                                                    color = if (isSelected) currentTheme.accent else Color.Gray,
                                                     shape = CircleShape
                                                 )
                                                 .clickable { selectedColorKey = paletteItem.id }
@@ -1411,7 +1580,7 @@ class MainActivity : ComponentActivity() {
                                 }
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Checkbox(checked = draftUnderline, onCheckedChange = { draftUnderline = it })
-                                    Text("Sublinhar texto no livro")
+                                    Text("Sublinhar texto no livro", color = currentTheme.text)
                                 }
                                 OutlinedTextField(
                                     value = draftNote,
@@ -1430,49 +1599,52 @@ class MainActivity : ComponentActivity() {
                                             showStudyBanner = false
                                             startAudio(draftSelection)
                                         }) {
-                                            Icon(Icons.Rounded.VolumeUp, contentDescription = null)
+                                            Icon(Icons.Rounded.VolumeUp, contentDescription = null, tint = currentTheme.accent)
                                             Spacer(modifier = Modifier.width(4.dp))
-                                            Text("Ouvir", maxLines = 1, softWrap = false)
+                                            Text("Ouvir", color = currentTheme.text, maxLines = 1, softWrap = false)
                                         }
                                     }
                                     OutlinedButton(onClick = { openDictionaryOrTranslate(draftSelection) }) {
-                                        Icon(Icons.Rounded.Translate, contentDescription = null)
+                                        Icon(Icons.Rounded.Translate, contentDescription = null, tint = currentTheme.accent)
                                         Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Dicionário / Tradutor", maxLines = 1, softWrap = false)
+                                        Text("Dicionário / Tradutor", color = currentTheme.text, maxLines = 1, softWrap = false)
                                     }
                                     OutlinedButton(onClick = {
                                         researchQueryInput = draftSelection
                                         showResearchHubDialog = true
                                     }) {
-                                        Icon(Icons.Rounded.Search, contentDescription = null)
+                                        Icon(Icons.Rounded.Search, contentDescription = null, tint = currentTheme.accent)
                                         Spacer(modifier = Modifier.width(4.dp))
-                                        Text("IA / Google", maxLines = 1, softWrap = false)
+                                        Text("IA / Google", color = currentTheme.text, maxLines = 1, softWrap = false)
                                     }
                                 }
                             }
                         },
                         confirmButton = {
-                            Button(onClick = {
-                                if (draftSelection.isNotBlank() || draftNote.isNotBlank()) {
-                                    val item = StudyAnnotation(
-                                        bookTitle = currentBook.title,
-                                        chapterIndex = currentChapterIndex,
-                                        chapterTitle = activeChapter.title,
-                                        selectedText = draftSelection.trim(),
-                                        note = draftNote.trim(),
-                                        colorName = selectedColorKey,
-                                        isUnderline = draftUnderline
-                                    )
-                                    annotations = listOf(item) + annotations
-                                    ReaderStorage.saveAnnotations(context, annotations)
+                            Button(
+                                colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color.White),
+                                onClick = {
+                                    if (draftSelection.isNotBlank() || draftNote.isNotBlank()) {
+                                        val item = StudyAnnotation(
+                                            bookTitle = currentBook.title,
+                                            chapterIndex = currentChapterIndex,
+                                            chapterTitle = activeChapter.title,
+                                            selectedText = draftSelection.trim(),
+                                            note = draftNote.trim(),
+                                            colorName = selectedColorKey,
+                                            isUnderline = draftUnderline
+                                        )
+                                        annotations = listOf(item) + annotations
+                                        ReaderStorage.saveAnnotations(context, annotations)
+                                    }
+                                    showNoteDialog = false
+                                    showStudyBanner = false
                                 }
-                                showNoteDialog = false
-                                showStudyBanner = false
-                            }) { Text("Guardar", maxLines = 1, softWrap = false) }
+                            ) { Text("Guardar", maxLines = 1, softWrap = false) }
                         },
                         dismissButton = {
                             TextButton(onClick = { showNoteDialog = false }) {
-                                Text("Cancelar", maxLines = 1, softWrap = false)
+                                Text("Cancelar", color = currentTheme.text, maxLines = 1, softWrap = false)
                             }
                         }
                     )
@@ -1498,7 +1670,7 @@ class MainActivity : ComponentActivity() {
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .clip(RoundedCornerShape(12.dp))
-                                            .background(if (isSelected) currentTheme.highlightBg.copy(alpha = 0.4f) else Color.Transparent)
+                                            .background(if (isSelected) currentTheme.accent.copy(alpha = 0.22f) else Color.Transparent)
                                             .clickable {
                                                 stopAudio()
                                                 currentChapterIndex = index
@@ -1510,7 +1682,7 @@ class MainActivity : ComponentActivity() {
                                     ) {
                                         Text(
                                             text = chapter.title,
-                                            color = currentTheme.text,
+                                            color = if (isSelected) currentTheme.accent else currentTheme.text,
                                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                                             fontSize = 15.sp
                                         )
@@ -1527,6 +1699,12 @@ class MainActivity : ComponentActivity() {
                     pages.getOrElse(currentPageIndex) { "" }
                 } else {
                     textContent
+                }
+
+                val effectiveAlign = if (currentAlign == ReaderAlignment.JUSTIFY && displayedText.length < 180) {
+                    TextAlign.Start
+                } else {
+                    currentAlign.align
                 }
 
                 val customTextToolbar = remember(
@@ -1565,7 +1743,7 @@ class MainActivity : ComponentActivity() {
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .padding(horizontal = 22.dp)
+                                .padding(horizontal = horizontalPaddingDp.dp)
                                 .then(
                                     if (readingViewMode == ReadingViewMode.SCROLL) {
                                         Modifier.verticalScroll(scrollState)
@@ -1578,16 +1756,20 @@ class MainActivity : ComponentActivity() {
                             if (showTopAndBottomBars) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    IconButton(onClick = { closeReaderBackToLibrary() }) {
+                                    IconButton(
+                                        onClick = { closeReaderBackToLibrary() },
+                                        modifier = Modifier.size(38.dp)
+                                    ) {
                                         Icon(Icons.Rounded.ArrowBack, contentDescription = "Voltar", tint = currentTheme.text)
                                     }
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
                                             text = currentBook.title,
-                                            fontSize = 16.sp,
+                                            fontFamily = FontFamily.Serif,
+                                            fontSize = 15.sp,
                                             fontWeight = FontWeight.Bold,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
@@ -1595,13 +1777,13 @@ class MainActivity : ComponentActivity() {
                                         )
                                         val reflowTag = if (activeReflowMode == ReflowMode.AUTO_ADAPT) "Reflow" else "Original"
                                         val subLabel = if (readingViewMode == ReadingViewMode.PAGED) {
-                                            "${activeChapter.title} • Pág. ${currentPageIndex + 1}/${pages.size} • $reflowTag"
+                                            "${activeChapter.title} • ${currentPageIndex + 1}/${pages.size} • $reflowTag"
                                         } else {
                                             "${activeChapter.title} • $reflowTag"
                                         }
                                         Text(
                                             text = subLabel,
-                                            fontSize = 12.sp,
+                                            fontSize = 11.sp,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
                                             color = currentTheme.text.copy(alpha = 0.65f)
@@ -1609,9 +1791,16 @@ class MainActivity : ComponentActivity() {
                                     }
                                     Row(
                                         modifier = Modifier
-                                            .widthIn(max = 220.dp)
-                                            .horizontalScroll(rememberScrollState())
+                                            .widthIn(max = 152.dp)
+                                            .horizontalScroll(rememberScrollState()),
+                                        horizontalArrangement = Arrangement.spacedBy(2.dp)
                                     ) {
+                                        IconButton(
+                                            onClick = { showTypeSheet = true },
+                                            modifier = Modifier.size(36.dp)
+                                        ) {
+                                            Icon(Icons.Rounded.FormatSize, contentDescription = "Aparência e fontes", tint = currentTheme.accent)
+                                        }
                                         IconButton(
                                             onClick = {
                                                 val clipNow = clipboard.getText()?.text ?: ""
@@ -1620,13 +1809,21 @@ class MainActivity : ComponentActivity() {
                                                 }
                                                 showNoteDialog = true
                                             },
-                                            modifier = Modifier.size(34.dp)
+                                            modifier = Modifier.size(36.dp)
                                         ) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.EditNote,
-                                                contentDescription = "Paleta, sublinhar e nota",
-                                                tint = currentTheme.text
-                                            )
+                                            Icon(Icons.Rounded.EditNote, contentDescription = "Nota e destaque", tint = currentTheme.text)
+                                        }
+                                        IconButton(
+                                            onClick = { showTocSheet = true },
+                                            modifier = Modifier.size(36.dp)
+                                        ) {
+                                            Icon(Icons.Rounded.FormatListBulleted, contentDescription = "Índice", tint = currentTheme.text)
+                                        }
+                                        IconButton(
+                                            onClick = { showNotebookSheet = true },
+                                            modifier = Modifier.size(36.dp)
+                                        ) {
+                                            Icon(Icons.Rounded.Book, contentDescription = "Notas do livro", tint = currentTheme.text)
                                         }
                                         IconButton(
                                             onClick = {
@@ -1636,46 +1833,30 @@ class MainActivity : ComponentActivity() {
                                                     ReflowMode.AUTO_ADAPT
                                                 }
                                             },
-                                            modifier = Modifier.size(34.dp)
+                                            modifier = Modifier.size(36.dp)
                                         ) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.WrapText,
-                                                contentDescription = "Reflow / Adaptar ao ecrã",
-                                                tint = currentTheme.text
-                                            )
+                                            Icon(Icons.Rounded.WrapText, contentDescription = "Reflow", tint = currentTheme.text)
                                         }
                                         IconButton(
                                             onClick = { showTranslateSheet = true },
-                                            modifier = Modifier.size(34.dp)
+                                            modifier = Modifier.size(36.dp)
                                         ) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.Translate,
-                                                contentDescription = "Traduzir capítulo/livro",
-                                                tint = currentTheme.text
-                                            )
+                                            Icon(Icons.Rounded.Translate, contentDescription = "Traduzir", tint = currentTheme.text)
                                         }
                                         IconButton(
                                             onClick = {
                                                 researchQueryInput = draftSelection
                                                 showResearchHubDialog = true
                                             },
-                                            modifier = Modifier.size(34.dp)
+                                            modifier = Modifier.size(36.dp)
                                         ) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.TravelExplore,
-                                                contentDescription = "IA / Google / Dicionário",
-                                                tint = currentTheme.text
-                                            )
+                                            Icon(Icons.Rounded.TravelExplore, contentDescription = "Pesquisa e IA", tint = currentTheme.text)
                                         }
                                         IconButton(
                                             onClick = { showSavedAudioSheet = true },
-                                            modifier = Modifier.size(34.dp)
+                                            modifier = Modifier.size(36.dp)
                                         ) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.AudioFile,
-                                                contentDescription = "Áudio sincronizado",
-                                                tint = currentTheme.text
-                                            )
+                                            Icon(Icons.Rounded.AudioFile, contentDescription = "Áudios guardados", tint = currentTheme.text)
                                         }
                                         IconButton(
                                             onClick = {
@@ -1685,17 +1866,17 @@ class MainActivity : ComponentActivity() {
                                                     ReadingViewMode.SCROLL
                                                 }
                                             },
-                                            modifier = Modifier.size(34.dp)
+                                            modifier = Modifier.size(36.dp)
                                         ) {
                                             Icon(
                                                 imageVector = if (readingViewMode == ReadingViewMode.PAGED) Icons.Rounded.ViewStream else Icons.Rounded.AutoStories,
-                                                contentDescription = "Rolagem/Páginas",
+                                                contentDescription = "Rolagem ou páginas",
                                                 tint = currentTheme.text
                                             )
                                         }
                                         IconButton(
                                             onClick = { isFullscreenMode = !isFullscreenMode },
-                                            modifier = Modifier.size(34.dp)
+                                            modifier = Modifier.size(36.dp)
                                         ) {
                                             Icon(
                                                 imageVector = if (isFullscreenMode) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
@@ -1703,18 +1884,12 @@ class MainActivity : ComponentActivity() {
                                                 tint = currentTheme.text
                                             )
                                         }
-                                        IconButton(onClick = { showTocSheet = true }, modifier = Modifier.size(34.dp)) {
-                                            Icon(Icons.Rounded.FormatListBulleted, contentDescription = "Índice", tint = currentTheme.text)
-                                        }
-                                        IconButton(onClick = { showNotebookSheet = true }, modifier = Modifier.size(34.dp)) {
-                                            Icon(Icons.Rounded.Book, contentDescription = "Notas", tint = currentTheme.text)
-                                        }
-                                        IconButton(onClick = { showTypeSheet = true }, modifier = Modifier.size(34.dp)) {
-                                            Icon(Icons.Rounded.FormatSize, contentDescription = "Fontes", tint = currentTheme.text)
-                                        }
                                     }
                                 }
-                                Spacer(modifier = Modifier.height(16.dp))
+                                HorizontalDivider(
+                                    color = currentTheme.text.copy(alpha = 0.1f),
+                                    modifier = Modifier.padding(top = 8.dp, bottom = 14.dp)
+                                )
                             }
 
                             val bookAnnotations = annotations.filter {
@@ -1758,8 +1933,8 @@ class MainActivity : ComponentActivity() {
                                             if (wRange.first >= 0 && wRange.last < displayedText.length) {
                                                 addStyle(
                                                     SpanStyle(
-                                                        background = Color(0xFFFFB703),
-                                                        color = Color(0xFF000000),
+                                                        background = currentTheme.accent,
+                                                        color = Color.White,
                                                         fontWeight = FontWeight.Bold,
                                                         textDecoration = TextDecoration.Underline
                                                     ),
@@ -1777,9 +1952,9 @@ class MainActivity : ComponentActivity() {
                                     Text(
                                         text = annotatedText,
                                         fontSize = fontSize.sp,
-                                        lineHeight = (fontSize * 1.58f).sp,
+                                        lineHeight = (fontSize * lineHeightMultiplier).sp,
                                         fontFamily = currentFont.family,
-                                        textAlign = currentAlign.align,
+                                        textAlign = effectiveAlign,
                                         color = currentTheme.text
                                     )
                                 }
@@ -1803,7 +1978,7 @@ class MainActivity : ComponentActivity() {
                                         },
                                         enabled = currentPageIndex > 0
                                     ) {
-                                        Text("Anterior", maxLines = 1, softWrap = false)
+                                        Text("Anterior", color = currentTheme.text, maxLines = 1, softWrap = false)
                                     }
                                     Text(
                                         text = "${currentPageIndex + 1} / ${pages.size}",
@@ -1813,6 +1988,7 @@ class MainActivity : ComponentActivity() {
                                         softWrap = false
                                     )
                                     Button(
+                                        colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color.White),
                                         onClick = {
                                             if (currentPageIndex < pages.lastIndex) {
                                                 currentPageIndex++
@@ -1834,9 +2010,9 @@ class MainActivity : ComponentActivity() {
                             Surface(
                                 modifier = Modifier
                                     .align(Alignment.TopCenter)
-                                    .padding(top = 70.dp, start = 12.dp, end = 12.dp),
+                                    .padding(top = 72.dp, start = 12.dp, end = 12.dp),
                                 shape = RoundedCornerShape(24.dp),
-                                color = Color(0xFF1E1E2E),
+                                color = currentTheme.barBg,
                                 shadowElevation = 10.dp
                             ) {
                                 Row(
@@ -1883,7 +2059,7 @@ class MainActivity : ComponentActivity() {
                                         },
                                         contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
                                     ) {
-                                        Text("Sublinhar", color = Color.White, fontSize = 12.sp, maxLines = 1, softWrap = false)
+                                        Text("Sublinhar", color = currentTheme.text, fontSize = 12.sp, maxLines = 1, softWrap = false)
                                     }
                                     IconButton(
                                         onClick = {
@@ -1892,13 +2068,13 @@ class MainActivity : ComponentActivity() {
                                         },
                                         modifier = Modifier.size(32.dp)
                                     ) {
-                                        Icon(Icons.Rounded.VolumeUp, contentDescription = "Ouvir trecho", tint = Color.White)
+                                        Icon(Icons.Rounded.VolumeUp, contentDescription = "Ouvir trecho", tint = currentTheme.accent)
                                     }
                                     IconButton(onClick = { showNoteDialog = true }, modifier = Modifier.size(32.dp)) {
-                                        Icon(Icons.Rounded.EditNote, contentDescription = "Nota/Sublinhar/Cores", tint = Color.White)
+                                        Icon(Icons.Rounded.EditNote, contentDescription = "Nota/Sublinhar/Cores", tint = currentTheme.text)
                                     }
                                     IconButton(onClick = { openDictionaryOrTranslate(draftSelection) }, modifier = Modifier.size(32.dp)) {
-                                        Icon(Icons.Rounded.Translate, contentDescription = "Dicionário / Tradutor", tint = Color.White)
+                                        Icon(Icons.Rounded.Translate, contentDescription = "Dicionário / Tradutor", tint = currentTheme.text)
                                     }
                                     IconButton(
                                         onClick = {
@@ -1908,10 +2084,10 @@ class MainActivity : ComponentActivity() {
                                         },
                                         modifier = Modifier.size(32.dp)
                                     ) {
-                                        Icon(Icons.Rounded.TravelExplore, contentDescription = "IA / Google", tint = Color.White)
+                                        Icon(Icons.Rounded.TravelExplore, contentDescription = "IA / Google", tint = currentTheme.text)
                                     }
                                     IconButton(onClick = { showStudyBanner = false }, modifier = Modifier.size(28.dp)) {
-                                        Icon(Icons.Rounded.Close, contentDescription = "Fechar", tint = Color.Gray)
+                                        Icon(Icons.Rounded.Close, contentDescription = "Fechar", tint = currentTheme.text.copy(alpha = 0.6f))
                                     }
                                 }
                             }
@@ -1921,14 +2097,15 @@ class MainActivity : ComponentActivity() {
                             Surface(
                                 modifier = Modifier
                                     .align(Alignment.BottomCenter)
-                                    .padding(16.dp)
-                                    .fillMaxWidth(),
-                                shape = RoundedCornerShape(32.dp),
+                                    .padding(horizontal = 16.dp, vertical = 14.dp)
+                                    .fillMaxWidth()
+                                    .border(1.dp, currentTheme.text.copy(alpha = 0.1f), RoundedCornerShape(28.dp)),
+                                shape = RoundedCornerShape(28.dp),
                                 color = currentTheme.barBg,
                                 shadowElevation = 8.dp
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
@@ -1944,7 +2121,7 @@ class MainActivity : ComponentActivity() {
                                             startAudio(textContent)
                                         }
                                     }) {
-                                        Text("${speechRate}x", fontWeight = FontWeight.Bold, color = currentTheme.text, maxLines = 1, softWrap = false)
+                                        Text("${speechRate}x", fontWeight = FontWeight.Bold, color = currentTheme.accent, maxLines = 1, softWrap = false)
                                     }
                                     IconButton(
                                         onClick = {
@@ -1962,15 +2139,15 @@ class MainActivity : ComponentActivity() {
                                     IconButton(
                                         onClick = { if (isPlaying) stopAudio() else startAudio(textContent) },
                                         modifier = Modifier
-                                            .size(52.dp)
+                                            .size(50.dp)
                                             .clip(CircleShape)
-                                            .background(Color(0xFF4F46E5))
+                                            .background(currentTheme.accent)
                                     ) {
                                         Icon(
                                             imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
                                             contentDescription = "Play/Pause",
                                             tint = Color.White,
-                                            modifier = Modifier.size(28.dp)
+                                            modifier = Modifier.size(26.dp)
                                         )
                                     }
                                     IconButton(
@@ -2016,6 +2193,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 Scaffold(
+                    containerColor = currentTheme.bg,
                     bottomBar = {
                         NavigationBar(containerColor = currentTheme.barBg) {
                             NavigationBarItem(
@@ -2024,6 +2202,13 @@ class MainActivity : ComponentActivity() {
                                     refreshLibraryAndOrg()
                                     currentTab = 0
                                 },
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = currentTheme.accent,
+                                    selectedTextColor = currentTheme.accent,
+                                    indicatorColor = currentTheme.accent.copy(alpha = 0.16f),
+                                    unselectedIconColor = currentTheme.text.copy(alpha = 0.65f),
+                                    unselectedTextColor = currentTheme.text.copy(alpha = 0.65f)
+                                ),
                                 icon = { Icon(Icons.Rounded.Home, contentDescription = null) },
                                 label = { Text("Início", fontSize = 11.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }
                             )
@@ -2033,18 +2218,39 @@ class MainActivity : ComponentActivity() {
                                     refreshLibraryAndOrg()
                                     currentTab = 1
                                 },
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = currentTheme.accent,
+                                    selectedTextColor = currentTheme.accent,
+                                    indicatorColor = currentTheme.accent.copy(alpha = 0.16f),
+                                    unselectedIconColor = currentTheme.text.copy(alpha = 0.65f),
+                                    unselectedTextColor = currentTheme.text.copy(alpha = 0.65f)
+                                ),
                                 icon = { Icon(Icons.Rounded.LocalLibrary, contentDescription = null) },
                                 label = { Text("Biblioteca", fontSize = 11.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }
                             )
                             NavigationBarItem(
                                 selected = currentTab == 2,
                                 onClick = { currentTab = 2 },
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = currentTheme.accent,
+                                    selectedTextColor = currentTheme.accent,
+                                    indicatorColor = currentTheme.accent.copy(alpha = 0.16f),
+                                    unselectedIconColor = currentTheme.text.copy(alpha = 0.65f),
+                                    unselectedTextColor = currentTheme.text.copy(alpha = 0.65f)
+                                ),
                                 icon = { Icon(Icons.Rounded.Book, contentDescription = null) },
                                 label = { Text("Caderno", fontSize = 11.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }
                             )
                             NavigationBarItem(
                                 selected = currentTab == 3,
                                 onClick = { currentTab = 3 },
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = currentTheme.accent,
+                                    selectedTextColor = currentTheme.accent,
+                                    indicatorColor = currentTheme.accent.copy(alpha = 0.16f),
+                                    unselectedIconColor = currentTheme.text.copy(alpha = 0.65f),
+                                    unselectedTextColor = currentTheme.text.copy(alpha = 0.65f)
+                                ),
                                 icon = { Icon(Icons.Rounded.Settings, contentDescription = null) },
                                 label = { Text("Ajustes", fontSize = 11.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }
                             )
@@ -2054,36 +2260,302 @@ class MainActivity : ComponentActivity() {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
+                            .background(currentTheme.bg)
                             .padding(innerPadding)
                     ) {
                         when (currentTab) {
-                            0 -> HomeScreen(
-                                theme = currentTheme,
-                                recentBook = recentHomeBook,
-                                totalBooksCount = savedBooks.size,
-                                totalNotesCount = annotations.size,
-                                onContinueReading = {
-                                    if (recentMeta != null) {
-                                        openBookMeta(recentMeta)
-                                    } else {
-                                        filePicker.launch(arrayOf("application/epub+zip", "application/pdf", "text/plain"))
+                            0 -> {
+                                LazyColumn(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                                ) {
+                                    item {
+                                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            Text(
+                                                text = "GlowReader",
+                                                fontFamily = FontFamily.Serif,
+                                                fontSize = 28.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = currentTheme.text
+                                            )
+                                            Text(
+                                                text = "Continua a tua leitura, organiza o estudo e consulta tudo sem sair da app.",
+                                                fontSize = 13.sp,
+                                                color = currentTheme.text.copy(alpha = 0.72f)
+                                            )
+                                        }
                                     }
-                                },
-                                onOpenLibrary = {
-                                    refreshLibraryAndOrg()
-                                    currentTab = 1
-                                },
-                                onOpenNotebook = { currentTab = 2 },
-                                onOpenSettings = { currentTab = 3 },
-                                onImportBook = {
-                                    filePicker.launch(arrayOf("application/epub+zip", "application/pdf", "text/plain"))
+
+                                    item {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                        ) {
+                                            Card(
+                                                colors = CardDefaults.cardColors(containerColor = currentTheme.barBg),
+                                                shape = RoundedCornerShape(16.dp),
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .clickable {
+                                                        refreshLibraryAndOrg()
+                                                        currentTab = 1
+                                                    }
+                                            ) {
+                                                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                    Text(
+                                                        text = "${savedBooks.size}",
+                                                        fontSize = 22.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = currentTheme.accent
+                                                    )
+                                                    Text(
+                                                        text = "Na biblioteca",
+                                                        fontSize = 12.sp,
+                                                        color = currentTheme.text.copy(alpha = 0.8f),
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                }
+                                            }
+
+                                            Card(
+                                                colors = CardDefaults.cardColors(containerColor = currentTheme.barBg),
+                                                shape = RoundedCornerShape(16.dp),
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .clickable { currentTab = 2 }
+                                            ) {
+                                                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                    Text(
+                                                        text = "${annotations.size}",
+                                                        fontSize = 22.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = currentTheme.accent
+                                                    )
+                                                    Text(
+                                                        text = "Notas e marcas",
+                                                        fontSize = 12.sp,
+                                                        color = currentTheme.text.copy(alpha = 0.8f),
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    item {
+                                        Card(
+                                            colors = CardDefaults.cardColors(containerColor = currentTheme.barBg),
+                                            shape = RoundedCornerShape(20.dp),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .border(1.dp, currentTheme.accent.copy(alpha = 0.25f), RoundedCornerShape(20.dp))
+                                        ) {
+                                            Column(
+                                                modifier = Modifier.padding(16.dp),
+                                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                                            ) {
+                                                Text(
+                                                    text = "Continuar leitura",
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = currentTheme.accent
+                                                )
+                                                if (recentHomeBook != null && recentMeta != null) {
+                                                    Text(
+                                                        text = recentHomeBook.title,
+                                                        fontFamily = FontFamily.Serif,
+                                                        fontSize = 18.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = currentTheme.text,
+                                                        maxLines = 2,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                    Text(
+                                                        text = recentHomeBook.author,
+                                                        fontSize = 12.sp,
+                                                        color = currentTheme.text.copy(alpha = 0.72f),
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                    LinearProgressIndicator(
+                                                        progress = { recentHomeBook.progressPercent },
+                                                        color = currentTheme.accent,
+                                                        trackColor = currentTheme.text.copy(alpha = 0.12f),
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .height(6.dp)
+                                                            .clip(CircleShape)
+                                                    )
+                                                    Button(
+                                                        colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color.White),
+                                                        onClick = { openBookMeta(recentMeta) },
+                                                        modifier = Modifier.fillMaxWidth()
+                                                    ) {
+                                                        Icon(Icons.Rounded.PlayArrow, contentDescription = null)
+                                                        Spacer(modifier = Modifier.width(6.dp))
+                                                        Text("Continuar a ler", maxLines = 1, softWrap = false)
+                                                    }
+                                                } else {
+                                                    Text(
+                                                        text = "Ainda não tens nenhum livro aberto. Importa um EPUB, PDF ou TXT para começar.",
+                                                        fontSize = 13.sp,
+                                                        color = currentTheme.text.copy(alpha = 0.8f)
+                                                    )
+                                                    Button(
+                                                        colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color.White),
+                                                        onClick = {
+                                                            filePicker.launch(arrayOf("application/epub+zip", "application/pdf", "text/plain"))
+                                                        }
+                                                    ) {
+                                                        Icon(Icons.Rounded.Add, contentDescription = null)
+                                                        Spacer(modifier = Modifier.width(6.dp))
+                                                        Text("Importar primeiro livro", maxLines = 1, softWrap = false)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    item {
+                                        Text(
+                                            text = "Atalhos rápidos",
+                                            fontSize = 15.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = currentTheme.text
+                                        )
+                                    }
+
+                                    item {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                        ) {
+                                            Card(
+                                                colors = CardDefaults.cardColors(containerColor = currentTheme.barBg),
+                                                shape = RoundedCornerShape(16.dp),
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .clickable {
+                                                        refreshLibraryAndOrg()
+                                                        currentTab = 1
+                                                    }
+                                            ) {
+                                                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                    Icon(Icons.Rounded.LocalLibrary, contentDescription = null, tint = currentTheme.accent)
+                                                    Text("Biblioteca", fontWeight = FontWeight.Bold, color = currentTheme.text, maxLines = 1, softWrap = false)
+                                                    Text("Livros e artigos", fontSize = 11.sp, color = currentTheme.text.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                }
+                                            }
+                                            Card(
+                                                colors = CardDefaults.cardColors(containerColor = currentTheme.barBg),
+                                                shape = RoundedCornerShape(16.dp),
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .clickable {
+                                                        filePicker.launch(arrayOf("application/epub+zip", "application/pdf", "text/plain"))
+                                                    }
+                                            ) {
+                                                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                    Icon(Icons.Rounded.UploadFile, contentDescription = null, tint = currentTheme.accent)
+                                                    Text("Importar livro", fontWeight = FontWeight.Bold, color = currentTheme.text, maxLines = 1, softWrap = false)
+                                                    Text("EPUB, PDF ou TXT", fontSize = 11.sp, color = currentTheme.text.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    item {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                        ) {
+                                            Card(
+                                                colors = CardDefaults.cardColors(containerColor = currentTheme.barBg),
+                                                shape = RoundedCornerShape(16.dp),
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .clickable { currentTab = 2 }
+                                            ) {
+                                                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                    Icon(Icons.Rounded.Book, contentDescription = null, tint = currentTheme.accent)
+                                                    Text("Caderno", fontWeight = FontWeight.Bold, color = currentTheme.text, maxLines = 1, softWrap = false)
+                                                    Text("Destaques e notas", fontSize = 11.sp, color = currentTheme.text.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                }
+                                            }
+                                            Card(
+                                                colors = CardDefaults.cardColors(containerColor = currentTheme.barBg),
+                                                shape = RoundedCornerShape(16.dp),
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .clickable { currentTab = 3 }
+                                            ) {
+                                                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                    Icon(Icons.Rounded.Settings, contentDescription = null, tint = currentTheme.accent)
+                                                    Text("Ajustes", fontWeight = FontWeight.Bold, color = currentTheme.text, maxLines = 1, softWrap = false)
+                                                    Text("Leitura, voz e app", fontSize = 11.sp, color = currentTheme.text.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    item {
+                                        Card(
+                                            colors = CardDefaults.cardColors(containerColor = currentTheme.barBg),
+                                            shape = RoundedCornerShape(18.dp),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Column(
+                                                modifier = Modifier.padding(14.dp),
+                                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                                            ) {
+                                                Text(
+                                                    text = "Consulta rápida na app",
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 15.sp,
+                                                    color = currentTheme.text
+                                                )
+                                                OutlinedTextField(
+                                                    value = lookupQueryInput,
+                                                    onValueChange = { lookupQueryInput = it },
+                                                    label = { Text("Palavra, expressão ou tema") },
+                                                    singleLine = true,
+                                                    modifier = Modifier.fillMaxWidth()
+                                                )
+                                                Row(
+                                                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                                ) {
+                                                    Button(
+                                                        colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color.White),
+                                                        onClick = { openDictionaryOrTranslate(lookupQueryInput) }
+                                                    ) {
+                                                        Text("Dicionário", maxLines = 1, softWrap = false)
+                                                    }
+                                                    OutlinedButton(onClick = {
+                                                        openResearchTarget(ResearchToolTarget.TRANSLATE, lookupQueryInput)
+                                                    }) {
+                                                        Text("Traduzir", color = currentTheme.text, maxLines = 1, softWrap = false)
+                                                    }
+                                                    OutlinedButton(onClick = {
+                                                        openResearchTarget(ResearchToolTarget.GOOGLE_SEARCH, lookupQueryInput)
+                                                    }) {
+                                                        Text("Pesquisar", color = currentTheme.text, maxLines = 1, softWrap = false)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
-                            )
+                            }
 
                             1 -> {
                                 if (isImporting) {
                                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                        CircularProgressIndicator(color = Color(0xFF4F46E5))
+                                        CircularProgressIndicator(color = currentTheme.accent)
                                     }
                                 } else {
                                     val visibleBooks = remember(
@@ -2270,6 +2742,7 @@ class MainActivity : ComponentActivity() {
                                                         ) {
                                                             LinearProgressIndicator(
                                                                 progress = { (progressPct / 100f).coerceIn(0f, 1f) },
+                                                                color = currentTheme.accent,
                                                                 modifier = Modifier
                                                                     .weight(1f)
                                                                     .height(4.dp)
@@ -2371,6 +2844,7 @@ class MainActivity : ComponentActivity() {
                                             ) {
                                                 Text(
                                                     text = if (showSecretShelf) "Estante Secreta" else "Biblioteca",
+                                                    fontFamily = FontFamily.Serif,
                                                     fontSize = 24.sp,
                                                     fontWeight = FontWeight.Bold,
                                                     color = currentTheme.text,
@@ -2427,6 +2901,7 @@ class MainActivity : ComponentActivity() {
                                                         Text("URL", fontSize = 12.sp, maxLines = 1, softWrap = false)
                                                     }
                                                     Button(
+                                                        colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color.White),
                                                         onClick = {
                                                             filePicker.launch(arrayOf("application/epub+zip", "application/pdf", "text/plain"))
                                                         },
@@ -2583,12 +3058,19 @@ class MainActivity : ComponentActivity() {
                                     verticalArrangement = Arrangement.spacedBy(12.dp)
                                 ) {
                                     item {
-                                        Text("Caderno", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = currentTheme.text)
+                                        Text(
+                                            text = "Caderno",
+                                            fontFamily = FontFamily.Serif,
+                                            fontSize = 24.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = currentTheme.text
+                                        )
                                     }
 
                                     item {
                                         Card(
                                             colors = CardDefaults.cardColors(containerColor = currentTheme.barBg),
+                                            shape = RoundedCornerShape(18.dp),
                                             modifier = Modifier.fillMaxWidth()
                                         ) {
                                             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2615,18 +3097,18 @@ class MainActivity : ComponentActivity() {
                                                             "Falha ao exportar."
                                                         }
                                                     }) {
-                                                        Text("Exportar .MD", maxLines = 1, softWrap = false)
+                                                        Text("Exportar .MD", color = currentTheme.text, maxLines = 1, softWrap = false)
                                                     }
                                                     OutlinedButton(onClick = {
                                                         val md = StudyNotebookManager.formatAnnotationsAsMarkdown(annotations)
                                                         clipboard.setText(AnnotatedString(md))
                                                         exportStatusMessage = "Caderno copiado para a área de transferência."
                                                     }) {
-                                                        Text("Copiar resumo", maxLines = 1, softWrap = false)
+                                                        Text("Copiar resumo", color = currentTheme.text, maxLines = 1, softWrap = false)
                                                     }
                                                 }
                                                 if (exportStatusMessage != null) {
-                                                    Text(exportStatusMessage!!, fontSize = 12.sp, color = Color(0xFF4F46E5))
+                                                    Text(exportStatusMessage!!, fontSize = 12.sp, color = currentTheme.accent)
                                                 }
                                             }
                                         }
@@ -2635,6 +3117,7 @@ class MainActivity : ComponentActivity() {
                                     item {
                                         Card(
                                             colors = CardDefaults.cardColors(containerColor = currentTheme.barBg),
+                                            shape = RoundedCornerShape(18.dp),
                                             modifier = Modifier.fillMaxWidth()
                                         ) {
                                             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2651,21 +3134,24 @@ class MainActivity : ComponentActivity() {
                                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                                     verticalAlignment = Alignment.CenterVertically
                                                 ) {
-                                                    Button(onClick = { openDictionaryOrTranslate(lookupQueryInput) }) {
+                                                    Button(
+                                                        colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color.White),
+                                                        onClick = { openDictionaryOrTranslate(lookupQueryInput) }
+                                                    ) {
                                                         Text("Consultar", maxLines = 1, softWrap = false)
                                                     }
                                                     OutlinedButton(onClick = {
                                                         openResearchTarget(ResearchToolTarget.GOOGLE_SEARCH, lookupQueryInput)
                                                     }) {
-                                                        Text("Google", maxLines = 1, softWrap = false)
+                                                        Text("Google", color = currentTheme.text, maxLines = 1, softWrap = false)
                                                     }
                                                     OutlinedButton(onClick = {
                                                         openResearchTarget(ResearchToolTarget.AI_ASSISTANT, lookupQueryInput)
                                                     }) {
-                                                        Text("IA na App", maxLines = 1, softWrap = false)
+                                                        Text("IA na App", color = currentTheme.text, maxLines = 1, softWrap = false)
                                                     }
                                                     OutlinedButton(onClick = { showColorMixerDialog = true }) {
-                                                        Text("Paleta", maxLines = 1, softWrap = false)
+                                                        Text("Paleta", color = currentTheme.text, maxLines = 1, softWrap = false)
                                                     }
                                                 }
                                                 Row(
@@ -2714,6 +3200,7 @@ class MainActivity : ComponentActivity() {
                                         items(annotations, key = { it.id }) { ann ->
                                             Card(
                                                 colors = CardDefaults.cardColors(containerColor = currentTheme.barBg),
+                                                shape = RoundedCornerShape(16.dp),
                                                 modifier = Modifier.fillMaxWidth()
                                             ) {
                                                 Row(
@@ -2729,7 +3216,7 @@ class MainActivity : ComponentActivity() {
                                                             Text(ann.selectedText, fontSize = 13.sp, color = currentTheme.text.copy(alpha = 0.85f))
                                                         }
                                                         if (ann.note.isNotBlank()) {
-                                                            Text("Nota: ${ann.note}", fontSize = 12.sp, color = Color(0xFF4F46E5))
+                                                            Text("Nota: ${ann.note}", fontSize = 12.sp, color = currentTheme.accent)
                                                         }
                                                     }
                                                     IconButton(onClick = {
@@ -2776,7 +3263,13 @@ class MainActivity : ComponentActivity() {
                                     verticalArrangement = Arrangement.spacedBy(14.dp)
                                 ) {
                                     item {
-                                        Text("Ajustes", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = currentTheme.text)
+                                        Text(
+                                            text = "Ajustes",
+                                            fontFamily = FontFamily.Serif,
+                                            fontSize = 24.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = currentTheme.text
+                                        )
                                     }
                                     item {
                                         Text("Tema da leitura", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
@@ -2894,7 +3387,8 @@ class MainActivity : ComponentActivity() {
                                                 showSecretPinDialog = true
                                             }) {
                                                 Text(
-                                                    text = if (LibraryOrganizationManager.hasSecretPin(context)) "Alterar / Verificar PIN" else "Definir PIN",
+                                                    text = if (LibraryOrganizationManager.hasSecretPin(context)) "Alterar PIN" else "Definir PIN",
+                                                    color = currentTheme.text,
                                                     maxLines = 1,
                                                     softWrap = false
                                                 )
@@ -2903,7 +3397,7 @@ class MainActivity : ComponentActivity() {
                                                 LibraryOrganizationManager.lockSecretShelf(context)
                                                 showSecretShelf = false
                                             }) {
-                                                Text("Bloquear estante", maxLines = 1, softWrap = false)
+                                                Text("Bloquear estante", color = currentTheme.text, maxLines = 1, softWrap = false)
                                             }
                                         }
                                     }
@@ -2925,7 +3419,7 @@ class MainActivity : ComponentActivity() {
                                                 }
                                                 runCatching { context.startActivity(intent) }
                                             }) {
-                                                Text("Motor TTS do Sistema", maxLines = 1, softWrap = false)
+                                                Text("Motor TTS Sistema", color = currentTheme.text, maxLines = 1, softWrap = false)
                                             }
                                             OutlinedButton(onClick = {
                                                 val intent = Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA).apply {
@@ -2933,7 +3427,7 @@ class MainActivity : ComponentActivity() {
                                                 }
                                                 runCatching { context.startActivity(intent) }
                                             }) {
-                                                Text("Baixar Vozes Sistema", maxLines = 1, softWrap = false)
+                                                Text("Vozes do Sistema", color = currentTheme.text, maxLines = 1, softWrap = false)
                                             }
                                         }
                                         Spacer(modifier = Modifier.height(6.dp))
@@ -2990,9 +3484,9 @@ class MainActivity : ComponentActivity() {
                                                 ) {
                                                     listOf(
                                                         "all" to "Todas",
-                                                        "multi" to "Multilingual",
-                                                        "pt" to "Português",
-                                                        "en" to "English"
+                                                        "multi" to "Multi",
+                                                        "pt" to "PT",
+                                                        "en" to "EN"
                                                     ).forEach { (key, label) ->
                                                         FilterChip(
                                                             selected = edgeVoiceLangFilter == key,
@@ -3041,7 +3535,7 @@ class MainActivity : ComponentActivity() {
                                                             onlineTestResult = if (ok) "Ligação Edge/Online ativa." else "Sem resposta de rede."
                                                         }
                                                     }) {
-                                                        Text("Testar Edge", maxLines = 1, softWrap = false)
+                                                        Text("Testar Edge", color = currentTheme.text, maxLines = 1, softWrap = false)
                                                     }
                                                     if (onlineTestResult != null) {
                                                         Text(onlineTestResult!!, fontSize = 12.sp, color = currentTheme.text)
@@ -3070,7 +3564,7 @@ class MainActivity : ComponentActivity() {
                                                     text = "No aparelho (${downloadedCatalog.size})",
                                                     fontWeight = FontWeight.SemiBold,
                                                     fontSize = 13.sp,
-                                                    color = Color(0xFF4F46E5)
+                                                    color = currentTheme.accent
                                                 )
                                                 if (downloadedCatalog.isEmpty()) {
                                                     Text(
@@ -3129,7 +3623,7 @@ class MainActivity : ComponentActivity() {
                                                     text = "Para baixar (${availableToDownloadCatalog.size})",
                                                     fontWeight = FontWeight.SemiBold,
                                                     fontSize = 13.sp,
-                                                    color = Color(0xFF4F46E5)
+                                                    color = currentTheme.accent
                                                 )
                                                 availableToDownloadCatalog.forEach { item ->
                                                     val isThisDownloading = downloadingItemId == item.id
@@ -3153,6 +3647,7 @@ class MainActivity : ComponentActivity() {
                                                             )
                                                         }
                                                         Button(
+                                                            colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color.White),
                                                             onClick = {
                                                                 downloadingItemId = item.id
                                                                 downloadingPercent = 1
@@ -3216,7 +3711,7 @@ class MainActivity : ComponentActivity() {
                                                     OutlinedButton(onClick = {
                                                         zipPicker.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream"))
                                                     }) {
-                                                        Text("Escolher .ZIP", maxLines = 1, softWrap = false)
+                                                        Text("Escolher .ZIP", color = currentTheme.text, maxLines = 1, softWrap = false)
                                                     }
                                                     OutlinedButton(onClick = {
                                                         voiceDownloadStatus = "A baixar e extrair .zip..."
@@ -3235,11 +3730,11 @@ class MainActivity : ComponentActivity() {
                                                             }
                                                         }
                                                     }) {
-                                                        Text("Baixar / Extrair .ZIP", maxLines = 1, softWrap = false)
+                                                        Text("Extrair .ZIP", color = currentTheme.text, maxLines = 1, softWrap = false)
                                                     }
                                                 }
                                                 if (voiceDownloadStatus != null) {
-                                                    Text(voiceDownloadStatus!!, fontSize = 12.sp, color = Color(0xFF4F46E5))
+                                                    Text(voiceDownloadStatus!!, fontSize = 12.sp, color = currentTheme.accent)
                                                 }
                                             }
                                         }
