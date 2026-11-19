@@ -83,6 +83,36 @@ class MainActivity : ComponentActivity() {
             var barsBehaviorMode by remember { mutableStateOf(BarsBehaviorMode.ALWAYS_VISIBLE) }
             var isFullscreenMode by remember { mutableStateOf(false) }
 
+            // Reflow ao abrir o livro e cores personalizadas / mistura de cores
+            var defaultReflowMode by remember {
+                mutableStateOf(ReadingEnhancementManager.loadDefaultReflowMode(context))
+            }
+            var activeReflowMode by remember { mutableStateOf(defaultReflowMode) }
+            var pendingOpenBookMeta by remember { mutableStateOf<SavedBookMeta?>(null) }
+
+            var customColors by remember {
+                mutableStateOf(ReadingEnhancementManager.loadCustomColors(context))
+            }
+            var selectedColorKey by remember { mutableStateOf("preset_yellow") }
+            var showColorMixerDialog by remember { mutableStateOf(false) }
+            var mixColorA by remember { mutableStateOf(Color(0xFFFFEB3B)) }
+            var mixColorB by remember { mutableStateOf(Color(0xFF81D4FA)) }
+            var mixRatio by remember { mutableFloatStateOf(0.5f) }
+            var rgbRed by remember { mutableFloatStateOf(255f) }
+            var rgbGreen by remember { mutableFloatStateOf(224f) }
+            var rgbBlue by remember { mutableFloatStateOf(130f) }
+            var newCustomColorName by remember { mutableStateOf("") }
+
+            // Tradução de capítulo ou livro inteiro e ferramentas internas (IA / Google / Dicionário)
+            var showTranslateSheet by remember { mutableStateOf(false) }
+            var translatedChaptersMap by remember { mutableStateOf>(emptyMap()) }
+            var useTranslatedText by remember { mutableStateOf(false) }
+            var isTranslating by remember { mutableStateOf(false) }
+            var translationProgressText by remember { mutableStateOf<String?>(null) }
+            var customAiUrl by remember { mutableStateOf(ReadingEnhancementManager.loadCustomAiUrl(context)) }
+            var showResearchHubDialog by remember { mutableStateOf(false) }
+            var researchQueryInput by remember { mutableStateOf("") }
+
             var savedBooks by remember { mutableStateOf(LibraryManager.loadLibrary(context)) }
             var orgMetaMap by remember {
                 mutableStateOf(LibraryOrganizationManager.ensureBooksRegistered(context, savedBooks))
@@ -198,6 +228,21 @@ class MainActivity : ComponentActivity() {
                 )
             }
 
+            fun openResearchTarget(target: ResearchToolTarget, query: String) {
+                val clean = query.trim()
+                if (clean.isNotEmpty()) {
+                    lookupHistory = StudyNotebookManager.recordLookup(context, clean, target.label)
+                }
+                val (title, url) = ReadingEnhancementManager.buildResearchUrl(
+                    context = context,
+                    target = target,
+                    query = clean,
+                    targetLang = translationTargetLang
+                )
+                internalLookupTitle = title
+                internalLookupUrl = url
+            }
+
             fun openDictionaryOrTranslate(query: String) {
                 val clean = query.trim()
                 if (clean.isNotEmpty()) {
@@ -212,13 +257,21 @@ class MainActivity : ComponentActivity() {
                 internalLookupUrl = url
             }
 
-            fun openBookMeta(meta: SavedBookMeta) {
+            fun launchBookWithReflow(meta: SavedBookMeta, chosenReflow: ReflowMode) {
                 val loaded = LibraryManager.loadBookContent(context, meta.id)
                 if (loaded != null) {
+                    activeReflowMode = chosenReflow
+                    translatedChaptersMap = emptyMap()
+                    useTranslatedText = false
+                    translationProgressText = null
                     activeBookMeta = meta
                     activeBookContent = loaded
                     currentChapterIndex = meta.lastChapterIndex.coerceIn(0, (loaded.chapters.size - 1).coerceAtLeast(0))
                 }
+            }
+
+            fun openBookMeta(meta: SavedBookMeta) {
+                pendingOpenBookMeta = meta
             }
 
             fun requestSecretShelfAccess(bookToToggle: SavedBookMeta? = null) {
@@ -290,6 +343,222 @@ class MainActivity : ComponentActivity() {
                         isImporting = false
                     }
                 }
+            }
+
+            val bookToPromptReflow = pendingOpenBookMeta
+            if (bookToPromptReflow != null) {
+                val isPdf = bookToPromptReflow.format.equals("PDF", ignoreCase = true)
+                AlertDialog(
+                    onDismissRequest = { pendingOpenBookMeta = null },
+                    title = { Text("Abrir: ${bookToPromptReflow.title}") },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text(
+                                text = if (isPdf) {
+                                    "Este livro é um PDF. Queres adaptar o texto ao ecrã (Reflow) para leitura fluida, voz e marcação?"
+                                } else {
+                                    "Escolhe como queres apresentar este livro ao abrir:"
+                                },
+                                fontSize = 13.sp
+                            )
+                            ReflowMode.entries.forEach { mode ->
+                                val isRecommended = isPdf && mode == ReflowMode.AUTO_ADAPT
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            val target = bookToPromptReflow
+                                            pendingOpenBookMeta = null
+                                            launchBookWithReflow(target, mode)
+                                        }
+                                ) {
+                                    Column(modifier = Modifier.padding(12.dp)) {
+                                        Text(
+                                            text = if (isRecommended) "${mode.label} (Recomendado PDF)" else mode.label,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 14.sp
+                                        )
+                                        Text(mode.description, fontSize = 12.sp)
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        Button(onClick = {
+                            val target = bookToPromptReflow
+                            pendingOpenBookMeta = null
+                            launchBookWithReflow(target, defaultReflowMode)
+                        }) {
+                            Text("Abrir padrão")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { pendingOpenBookMeta = null }) { Text("Cancelar") }
+                    }
+                )
+            }
+
+            if (showColorMixerDialog) {
+                val mixedPreview = ReadingEnhancementManager.mixColors(mixColorA, mixColorB, mixRatio)
+                val rgbPreview = ReadingEnhancementManager.buildColorFromRgb(rgbRed.toInt(), rgbGreen.toInt(), rgbBlue.toInt())
+                val activePreview = if (newCustomColorName.contains("RGB", ignoreCase = true)) rgbPreview else mixedPreview
+
+                AlertDialog(
+                    onDismissRequest = { showColorMixerDialog = false },
+                    title = { Text("Criar ou Misturar Cor de Destaque") },
+                    text = {
+                        Column(
+                            modifier = Modifier.verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = newCustomColorName,
+                                onValueChange = { newCustomColorName = it },
+                                label = { Text("Nome da cor (ex.: Destaque Estudo)") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+
+                            Text("Mistura de duas cores:", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                listOf(
+                                    Color(0xFFFFEB3B),
+                                    Color(0xFF81D4FA),
+                                    Color(0xFFF48FB1),
+                                    Color(0xFFA5D6A7),
+                                    Color(0xFFFFCC80)
+                                ).forEach { c ->
+                                    Box(
+                                        modifier = Modifier
+                                            .size(28.dp)
+                                            .clip(CircleShape)
+                                            .background(c)
+                                            .border(2.dp, if (mixColorA == c) Color.Black else Color.Transparent, CircleShape)
+                                            .clickable { mixColorA = c }
+                                    )
+                                }
+                                Text("+", fontWeight = FontWeight.Bold)
+                                listOf(
+                                    Color(0xFF81D4FA),
+                                    Color(0xFFCE93D8),
+                                    Color(0xFFFF8A80),
+                                    Color(0xFF80CBC4)
+                                ).forEach { c ->
+                                    Box(
+                                        modifier = Modifier
+                                            .size(28.dp)
+                                            .clip(CircleShape)
+                                            .background(c)
+                                            .border(2.dp, if (mixColorB == c) Color.Black else Color.Transparent, CircleShape)
+                                            .clickable { mixColorB = c }
+                                    )
+                                }
+                            }
+                            Text("Proporção da mistura: ${(mixRatio * 100).toInt()}%", fontSize = 11.sp)
+                            Slider(value = mixRatio, onValueChange = { mixRatio = it })
+
+                            Text("Ajuste fino RGB:", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            Text("Vermelho: ${rgbRed.toInt()}", fontSize = 11.sp)
+                            Slider(value = rgbRed, onValueChange = { rgbRed = it }, valueRange = 0f..255f)
+                            Text("Verde: ${rgbGreen.toInt()}", fontSize = 11.sp)
+                            Slider(value = rgbGreen, onValueChange = { rgbGreen = it }, valueRange = 0f..255f)
+                            Text("Azul: ${rgbBlue.toInt()}", fontSize = 11.sp)
+                            Slider(value = rgbBlue, onValueChange = { rgbBlue = it }, valueRange = 0f..255f)
+
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(mixedPreview)
+                                        .border(1.dp, Color.Gray, RoundedCornerShape(8.dp))
+                                )
+                                Text("Mistura", fontSize = 12.sp)
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(rgbPreview)
+                                        .border(1.dp, Color.Gray, RoundedCornerShape(8.dp))
+                                )
+                                Text("RGB", fontSize = 12.sp)
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(onClick = {
+                                val savedList = ReadingEnhancementManager.saveCustomColor(
+                                    context,
+                                    newCustomColorName.ifBlank { "RGB Personalizado" },
+                                    rgbPreview
+                                )
+                                customColors = savedList
+                                savedList.firstOrNull()?.let { selectedColorKey = it.id }
+                                newCustomColorName = ""
+                                showColorMixerDialog = false
+                            }) {
+                                Text("Guardar RGB")
+                            }
+                            Button(onClick = {
+                                val savedList = ReadingEnhancementManager.saveCustomColor(
+                                    context,
+                                    newCustomColorName.ifBlank { "Mistura Guardada" },
+                                    mixedPreview
+                                )
+                                customColors = savedList
+                                savedList.firstOrNull()?.let { selectedColorKey = it.id }
+                                newCustomColorName = ""
+                                showColorMixerDialog = false
+                            }) {
+                                Text("Guardar Mistura")
+                            }
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showColorMixerDialog = false }) { Text("Cancelar") }
+                    }
+                )
+            }
+
+            if (showResearchHubDialog) {
+                AlertDialog(
+                    onDismissRequest = { showResearchHubDialog = false },
+                    title = { Text("Pesquisa, IA, Dicionário e Tradutor") },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text(
+                                text = "Abre qualquer ferramenta diretamente dentro do GlowReader sem sair da leitura:",
+                                fontSize = 12.sp
+                            )
+                            OutlinedTextField(
+                                value = researchQueryInput,
+                                onValueChange = { researchQueryInput = it },
+                                label = { Text("Termo, conceito ou pergunta") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            ResearchToolTarget.entries.forEach { target ->
+                                OutlinedButton(
+                                    onClick = {
+                                        showResearchHubDialog = false
+                                        openResearchTarget(target, researchQueryInput)
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(target.label)
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { showResearchHubDialog = false }) { Text("Fechar") }
+                    }
+                )
             }
 
             if (showAddCategoryDialog) {
@@ -600,7 +869,14 @@ class MainActivity : ComponentActivity() {
             if (currentBook != null && currentMeta != null) {
                 val scrollState = rememberScrollState(initial = currentMeta.lastScrollPosition)
                 val activeChapter = currentBook.chapters.getOrElse(currentChapterIndex) { BookChapter("Vazio", "") }
-                val textContent = activeChapter.content
+                val baseChapterText = remember(activeChapter.content, activeReflowMode) {
+                    ReadingEnhancementManager.applyReflow(activeChapter.content, activeReflowMode)
+                }
+                val textContent = if (useTranslatedText && translatedChaptersMap.containsKey(currentChapterIndex)) {
+                    translatedChaptersMap[currentChapterIndex] ?: baseChapterText
+                } else {
+                    baseChapterText
+                }
 
                 val pages = remember(textContent, fontSize) {
                     val dynamicChars = (2200f * (19f / fontSize.coerceIn(12f, 36f))).toInt()
@@ -624,7 +900,6 @@ class MainActivity : ComponentActivity() {
                 var showNoteDialog by remember { mutableStateOf(false) }
                 var draftSelection by remember { mutableStateOf("") }
                 var draftNote by remember { mutableStateOf("") }
-                var draftColor by remember { mutableStateOf(HighlightColor.YELLOW) }
                 var draftUnderline by remember { mutableStateOf(false) }
 
                 DisposableEffect(currentChapterIndex) {
@@ -661,6 +936,101 @@ class MainActivity : ComponentActivity() {
                             lastClipboardText = clipNow
                             draftSelection = clipNow
                             showStudyBanner = true
+                        }
+                    }
+                }
+
+                if (showTranslateSheet) {
+                    ModalBottomSheet(
+                        onDismissRequest = { if (!isTranslating) showTranslateSheet = false },
+                        containerColor = currentTheme.barBg
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 20.dp, vertical = 10.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(
+                                text = "Traduzir Capítulo ou Livro Inteiro",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 18.sp,
+                                color = currentTheme.text
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                listOf("pt", "en", "es", "fr").forEach { lang ->
+                                    FilterChip(
+                                        selected = translationTargetLang == lang,
+                                        onClick = { translationTargetLang = lang },
+                                        label = { Text("→ ${lang.uppercase()}") }
+                                    )
+                                }
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = {
+                                        isTranslating = true
+                                        translationProgressText = "A traduzir capítulo atual..."
+                                        scope.launch {
+                                            val res = ReadingEnhancementManager.translateTextBlock(
+                                                text = baseChapterText,
+                                                targetLang = translationTargetLang
+                                            )
+                                            isTranslating = false
+                                            if (res.isSuccess) {
+                                                translatedChaptersMap = translatedChaptersMap + (currentChapterIndex to (res.getOrNull() ?: ""))
+                                                useTranslatedText = true
+                                                translationProgressText = "Capítulo traduzido!"
+                                            } else {
+                                                translationProgressText = res.exceptionOrNull()?.message ?: "Erro na tradução."
+                                            }
+                                        }
+                                    },
+                                    enabled = !isTranslating
+                                ) {
+                                    Text("Traduzir capítulo")
+                                }
+                                OutlinedButton(
+                                    onClick = {
+                                        isTranslating = true
+                                        scope.launch {
+                                            val updatedMap = translatedChaptersMap.toMutableMap()
+                                            currentBook.chapters.forEachIndexed { idx, ch ->
+                                                translationProgressText = "A traduzir capítulo ${idx + 1} de ${currentBook.chapters.size}..."
+                                                val reflowed = ReadingEnhancementManager.applyReflow(ch.content, activeReflowMode)
+                                                val res = ReadingEnhancementManager.translateTextBlock(
+                                                    text = reflowed,
+                                                    targetLang = translationTargetLang
+                                                )
+                                                if (res.isSuccess) {
+                                                    updatedMap[idx] = res.getOrNull() ?: reflowed
+                                                    translatedChaptersMap = updatedMap.toMap()
+                                                }
+                                            }
+                                            useTranslatedText = true
+                                            isTranslating = false
+                                            translationProgressText = "Tradução do livro concluída!"
+                                        }
+                                    },
+                                    enabled = !isTranslating
+                                ) {
+                                    Text("Traduzir livro todo")
+                                }
+                            }
+                            if (translatedChaptersMap.isNotEmpty()) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Exibir versão traduzida", color = currentTheme.text)
+                                    Switch(checked = useTranslatedText, onCheckedChange = { useTranslatedText = it })
+                                }
+                            }
+                            if (translationProgressText != null) {
+                                Text(translationProgressText!!, fontSize = 12.sp, color = Color(0xFF4F46E5))
+                            }
+                            Spacer(modifier = Modifier.height(20.dp))
                         }
                     }
                 }
@@ -813,32 +1183,50 @@ class MainActivity : ComponentActivity() {
                 }
 
                 if (showNoteDialog) {
+                    val paletteList = ReadingEnhancementManager.presetPaletteColors + customColors
                     AlertDialog(
                         onDismissRequest = { showNoteDialog = false },
-                        title = { Text("Marcar Cor, Sublinhar ou Anotar") },
+                        title = { Text("Destacar, Sublinhar ou Anotar") },
                         text = {
-                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Column(
+                                modifier = Modifier.verticalScroll(rememberScrollState()),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
                                 OutlinedTextField(
                                     value = draftSelection,
                                     onValueChange = { draftSelection = it },
                                     label = { Text("Trecho selecionado") },
                                     maxLines = 3
                                 )
-                                Text("Escolhe a cor real do marcador:", fontSize = 13.sp)
-                                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                                    HighlightColor.entries.forEach { c ->
-                                        val isSelected = draftColor == c
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Cores de destaque:", fontSize = 13.sp)
+                                    TextButton(onClick = { showColorMixerDialog = true }) {
+                                        Text("+ Misturar / Criar")
+                                    }
+                                }
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    paletteList.forEach { paletteItem ->
+                                        val isSelected = selectedColorKey == paletteItem.id
                                         Box(
                                             modifier = Modifier
-                                                .size(36.dp)
+                                                .size(34.dp)
                                                 .clip(CircleShape)
-                                                .background(c.toColor())
+                                                .background(paletteItem.toComposeColor())
                                                 .border(
                                                     width = if (isSelected) 3.dp else 1.dp,
                                                     color = if (isSelected) Color.Black else Color.Gray,
                                                     shape = CircleShape
                                                 )
-                                                .clickable { draftColor = c }
+                                                .clickable { selectedColorKey = paletteItem.id }
                                         )
                                     }
                                 }
@@ -853,10 +1241,20 @@ class MainActivity : ComponentActivity() {
                                     maxLines = 3
                                 )
                                 if (draftSelection.isNotBlank()) {
-                                    TextButton(onClick = { openDictionaryOrTranslate(draftSelection) }) {
-                                        Icon(Icons.Rounded.Translate, contentDescription = null)
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text("Abrir no $dictionaryProvider")
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        TextButton(onClick = { openDictionaryOrTranslate(draftSelection) }) {
+                                            Icon(Icons.Rounded.Translate, contentDescription = null)
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Traduzir")
+                                        }
+                                        TextButton(onClick = {
+                                            researchQueryInput = draftSelection
+                                            showResearchHubDialog = true
+                                        }) {
+                                            Icon(Icons.Rounded.Search, contentDescription = null)
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("IA / Google")
+                                        }
                                     }
                                 }
                             }
@@ -870,7 +1268,7 @@ class MainActivity : ComponentActivity() {
                                         chapterTitle = activeChapter.title,
                                         selectedText = draftSelection.trim(),
                                         note = draftNote.trim(),
-                                        colorName = draftColor.name,
+                                        colorName = selectedColorKey,
                                         isUnderline = draftUnderline
                                     )
                                     annotations = listOf(item) + annotations
@@ -982,10 +1380,11 @@ class MainActivity : ComponentActivity() {
                                             overflow = TextOverflow.Ellipsis,
                                             color = currentTheme.text
                                         )
+                                        val reflowTag = if (activeReflowMode == ReflowMode.AUTO_ADAPT) "Reflow" else "Original"
                                         val subLabel = if (readingViewMode == ReadingViewMode.PAGED) {
-                                            "${activeChapter.title} • Pág. ${currentPageIndex + 1}/${pages.size}"
+                                            "${activeChapter.title} • Pág. ${currentPageIndex + 1}/${pages.size} • $reflowTag"
                                         } else {
-                                            activeChapter.title
+                                            "${activeChapter.title} • $reflowTag"
                                         }
                                         Text(
                                             text = subLabel,
@@ -997,8 +1396,47 @@ class MainActivity : ComponentActivity() {
                                     }
                                     Row {
                                         IconButton(
+                                            onClick = {
+                                                activeReflowMode = if (activeReflowMode == ReflowMode.AUTO_ADAPT) {
+                                                    ReflowMode.ORIGINAL_LAYOUT
+                                                } else {
+                                                    ReflowMode.AUTO_ADAPT
+                                                }
+                                            },
+                                            modifier = Modifier.size(34.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.WrapText,
+                                                contentDescription = "Reflow / Adaptar ao ecrã",
+                                                tint = currentTheme.text
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = { showTranslateSheet = true },
+                                            modifier = Modifier.size(34.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.Translate,
+                                                contentDescription = "Traduzir capítulo/livro",
+                                                tint = currentTheme.text
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = {
+                                                researchQueryInput = ""
+                                                showResearchHubDialog = true
+                                            },
+                                            modifier = Modifier.size(34.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.TravelExplore,
+                                                contentDescription = "IA / Google / Dicionário",
+                                                tint = currentTheme.text
+                                            )
+                                        }
+                                        IconButton(
                                             onClick = { showSavedAudioSheet = true },
-                                            modifier = Modifier.size(36.dp)
+                                            modifier = Modifier.size(34.dp)
                                         ) {
                                             Icon(
                                                 imageVector = Icons.Rounded.AudioFile,
@@ -1014,7 +1452,7 @@ class MainActivity : ComponentActivity() {
                                                     ReadingViewMode.SCROLL
                                                 }
                                             },
-                                            modifier = Modifier.size(36.dp)
+                                            modifier = Modifier.size(34.dp)
                                         ) {
                                             Icon(
                                                 imageVector = if (readingViewMode == ReadingViewMode.PAGED) Icons.Rounded.ViewStream else Icons.Rounded.AutoStories,
@@ -1024,7 +1462,7 @@ class MainActivity : ComponentActivity() {
                                         }
                                         IconButton(
                                             onClick = { isFullscreenMode = !isFullscreenMode },
-                                            modifier = Modifier.size(36.dp)
+                                            modifier = Modifier.size(34.dp)
                                         ) {
                                             Icon(
                                                 imageVector = if (isFullscreenMode) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
@@ -1032,26 +1470,13 @@ class MainActivity : ComponentActivity() {
                                                 tint = currentTheme.text
                                             )
                                         }
-                                        IconButton(onClick = { showTocSheet = true }, modifier = Modifier.size(36.dp)) {
+                                        IconButton(onClick = { showTocSheet = true }, modifier = Modifier.size(34.dp)) {
                                             Icon(Icons.Rounded.FormatListBulleted, contentDescription = "Índice", tint = currentTheme.text)
                                         }
-                                        IconButton(onClick = {
-                                            val bm = StudyAnnotation(
-                                                bookTitle = currentBook.title,
-                                                chapterIndex = currentChapterIndex,
-                                                chapterTitle = activeChapter.title,
-                                                selectedText = displayedText.take(70) + "...",
-                                                isBookmark = true
-                                            )
-                                            annotations = listOf(bm) + annotations
-                                            ReaderStorage.saveAnnotations(context, annotations)
-                                        }, modifier = Modifier.size(36.dp)) {
-                                            Icon(Icons.Rounded.BookmarkAdd, contentDescription = "Marcador", tint = currentTheme.text)
-                                        }
-                                        IconButton(onClick = { showNotebookSheet = true }, modifier = Modifier.size(36.dp)) {
+                                        IconButton(onClick = { showNotebookSheet = true }, modifier = Modifier.size(34.dp)) {
                                             Icon(Icons.Rounded.Book, contentDescription = "Notas", tint = currentTheme.text)
                                         }
-                                        IconButton(onClick = { showTypeSheet = true }, modifier = Modifier.size(36.dp)) {
+                                        IconButton(onClick = { showTypeSheet = true }, modifier = Modifier.size(34.dp)) {
                                             Icon(Icons.Rounded.FormatSize, contentDescription = "Fontes", tint = currentTheme.text)
                                         }
                                     }
@@ -1070,11 +1495,7 @@ class MainActivity : ComponentActivity() {
                                     if (ann.selectedText.isNotBlank()) {
                                         val idx = displayedText.indexOf(ann.selectedText)
                                         if (idx >= 0) {
-                                            val c = try {
-                                                HighlightColor.valueOf(ann.colorName).toColor()
-                                            } catch (_: Exception) {
-                                                HighlightColor.YELLOW.toColor()
-                                            }
+                                            val c = ReadingEnhancementManager.resolveColorByNameOrArgb(context, ann.colorName)
                                             addStyle(
                                                 SpanStyle(
                                                     background = c.copy(alpha = 0.6f),
@@ -1172,6 +1593,7 @@ class MainActivity : ComponentActivity() {
                         }
 
                         if (showStudyBanner) {
+                            val quickColors = (ReadingEnhancementManager.presetPaletteColors + customColors).take(4)
                             Surface(
                                 modifier = Modifier
                                     .align(Alignment.TopCenter)
@@ -1185,19 +1607,19 @@ class MainActivity : ComponentActivity() {
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    HighlightColor.entries.forEach { c ->
+                                    quickColors.forEach { cItem ->
                                         Box(
                                             modifier = Modifier
                                                 .size(24.dp)
                                                 .clip(CircleShape)
-                                                .background(c.toColor())
+                                                .background(cItem.toComposeColor())
                                                 .clickable {
                                                     val item = StudyAnnotation(
                                                         bookTitle = currentBook.title,
                                                         chapterIndex = currentChapterIndex,
                                                         chapterTitle = activeChapter.title,
                                                         selectedText = draftSelection.trim(),
-                                                        colorName = c.name
+                                                        colorName = cItem.id
                                                     )
                                                     annotations = listOf(item) + annotations
                                                     ReaderStorage.saveAnnotations(context, annotations)
@@ -1206,13 +1628,14 @@ class MainActivity : ComponentActivity() {
                                         )
                                     }
                                     IconButton(onClick = { showNoteDialog = true }, modifier = Modifier.size(32.dp)) {
-                                        Icon(Icons.Rounded.EditNote, contentDescription = "Nota/Sublinhar", tint = Color.White)
+                                        Icon(Icons.Rounded.EditNote, contentDescription = "Nota/Sublinhar/Cores", tint = Color.White)
                                     }
                                     IconButton(onClick = {
-                                        openDictionaryOrTranslate(draftSelection)
+                                        researchQueryInput = draftSelection
+                                        showResearchHubDialog = true
                                         showStudyBanner = false
                                     }, modifier = Modifier.size(32.dp)) {
-                                        Icon(Icons.Rounded.Translate, contentDescription = "Traduzir/Dicionário", tint = Color.White)
+                                        Icon(Icons.Rounded.TravelExplore, contentDescription = "IA / Google / Traduzir", tint = Color.White)
                                     }
                                     IconButton(onClick = { showStudyBanner = false }, modifier = Modifier.size(28.dp)) {
                                         Icon(Icons.Rounded.Close, contentDescription = "Fechar", tint = Color.Gray)
@@ -1633,7 +2056,7 @@ class MainActivity : ComponentActivity() {
                                             modifier = Modifier.fillMaxWidth()
                                         ) {
                                             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                                Text("Dicionário e Tradutor Rápido", fontWeight = FontWeight.Bold, color = currentTheme.text)
+                                                Text("Dicionário, Tradutor, IA e Google", fontWeight = FontWeight.Bold, color = currentTheme.text)
                                                 Row(
                                                     modifier = Modifier.fillMaxWidth(),
                                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1642,12 +2065,27 @@ class MainActivity : ComponentActivity() {
                                                     OutlinedTextField(
                                                         value = lookupQueryInput,
                                                         onValueChange = { lookupQueryInput = it },
-                                                        label = { Text("Palavra ou expressão") },
+                                                        label = { Text("Palavra, conceito ou pergunta") },
                                                         singleLine = true,
                                                         modifier = Modifier.weight(1f)
                                                     )
                                                     Button(onClick = { openDictionaryOrTranslate(lookupQueryInput) }) {
                                                         Text("Consultar")
+                                                    }
+                                                }
+                                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                    OutlinedButton(onClick = {
+                                                        openResearchTarget(ResearchToolTarget.GOOGLE_SEARCH, lookupQueryInput)
+                                                    }) {
+                                                        Text("Google")
+                                                    }
+                                                    OutlinedButton(onClick = {
+                                                        openResearchTarget(ResearchToolTarget.AI_ASSISTANT, lookupQueryInput)
+                                                    }) {
+                                                        Text("IA na App")
+                                                    }
+                                                    OutlinedButton(onClick = { showColorMixerDialog = true }) {
+                                                        Text("Cores / Mistura")
                                                     }
                                                 }
                                                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1747,6 +2185,35 @@ class MainActivity : ComponentActivity() {
                                                 )
                                             }
                                         }
+                                    }
+                                    item {
+                                        Text("Reflow padrão ao abrir livros/PDFs", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
+                                        ReflowMode.entries.forEach { mode ->
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                RadioButton(
+                                                    selected = defaultReflowMode == mode,
+                                                    onClick = {
+                                                        defaultReflowMode = mode
+                                                        activeReflowMode = mode
+                                                        ReadingEnhancementManager.saveDefaultReflowMode(context, mode)
+                                                    }
+                                                )
+                                                Text(mode.label, color = currentTheme.text)
+                                            }
+                                        }
+                                    }
+                                    item {
+                                        Text("URL da IA na App", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        OutlinedTextField(
+                                            value = customAiUrl,
+                                            onValueChange = {
+                                                customAiUrl = it
+                                                ReadingEnhancementManager.saveCustomAiUrl(context, it)
+                                            },
+                                            singleLine = true,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
                                     }
                                     item {
                                         Text("Modo de leitura", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
