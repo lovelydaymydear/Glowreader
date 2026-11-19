@@ -30,9 +30,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalTextToolbar
+import androidx.compose.ui.platform.TextToolbar
+import androidx.compose.ui.platform.TextToolbarStatus
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -42,6 +46,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
@@ -158,9 +163,12 @@ class MainActivity : ComponentActivity() {
             var availableVoices by remember { mutableStateOf<List<Voice>>(emptyList()) }
             var selectedVoiceName by remember { mutableStateOf("") }
             var wordHighlightEnabled by remember { mutableStateOf(true) }
-            var customOnlineEndpoint by remember { mutableStateOf("") }
+            var customOnlineEndpoint by remember { mutableStateOf(VoiceEngineManager.DEFAULT_ONLINE_TTS_ENDPOINT) }
             var onlineTestResult by remember { mutableStateOf<String?>(null) }
             var piperModelsCount by remember { mutableIntStateOf(0) }
+            var downloadedModelsCount by remember { mutableIntStateOf(0) }
+            var voiceZipSourceInput by remember { mutableStateOf("") }
+            var voiceDownloadStatus by remember { mutableStateOf<String?>(null) }
 
             var isPlaying by remember { mutableStateOf(false) }
             var speechRate by remember { mutableFloatStateOf(1.0f) }
@@ -179,8 +187,13 @@ class MainActivity : ComponentActivity() {
                 categories = LibraryOrganizationManager.loadAllCategories(context)
             }
 
-            LaunchedEffect(Unit) {
+            fun refreshNeuralCounts() {
                 piperModelsCount = voiceEngine.checkLocalPiperModels().size
+                downloadedModelsCount = voiceEngine.listDownloadedNeuralItems().size
+            }
+
+            LaunchedEffect(Unit) {
+                refreshNeuralCounts()
                 voiceEngine.initializeAndroidTts { voices ->
                     availableVoices = voices
                 }
@@ -199,7 +212,9 @@ class MainActivity : ComponentActivity() {
                 voiceEngine.selectedVoiceName = selectedVoiceName
                 voiceEngine.speechRate = speechRate
                 voiceEngine.wordHighlightEnabled = wordHighlightEnabled
-                voiceEngine.customOnlineEndpointUrl = customOnlineEndpoint
+                voiceEngine.customOnlineEndpointUrl = customOnlineEndpoint.ifBlank {
+                    VoiceEngineManager.DEFAULT_ONLINE_TTS_ENDPOINT
+                }
                 voiceEngine.applyVoiceAndParams()
             }
 
@@ -940,7 +955,7 @@ class MainActivity : ComponentActivity() {
                 var showStudyBanner by remember { mutableStateOf(false) }
                 LaunchedEffect(Unit) {
                     while (true) {
-                        kotlinx.coroutines.delay(700)
+                        delay(650)
                         val clipNow = clipboard.getText()?.text ?: ""
                         if (clipNow.isNotBlank() && clipNow != lastClipboardText) {
                             lastClipboardText = clipNow
@@ -1372,6 +1387,39 @@ class MainActivity : ComponentActivity() {
                     textContent
                 }
 
+                val customTextToolbar = remember(
+                    currentBook.title,
+                    currentChapterIndex,
+                    activeChapter.title,
+                    selectedColorKey,
+                    annotations
+                ) {
+                    object : TextToolbar {
+                        override var status: TextToolbarStatus = TextToolbarStatus.Hidden
+
+                        override fun showMenu(
+                            rect: Rect,
+                            onCopyRequested: (() -> Unit)?,
+                            onPasteRequested: (() -> Unit)?,
+                            onCutRequested: (() -> Unit)?,
+                            onSelectAllRequested: (() -> Unit)?
+                        ) {
+                            status = TextToolbarStatus.Shown
+                            onCopyRequested?.invoke()
+                            val clipNow = clipboard.getText()?.text ?: ""
+                            if (clipNow.isNotBlank()) {
+                                draftSelection = clipNow
+                                lastClipboardText = clipNow
+                                showStudyBanner = true
+                            }
+                        }
+
+                        override fun hide() {
+                            status = TextToolbarStatus.Hidden
+                        }
+                    }
+                }
+
                 Surface(modifier = Modifier.fillMaxSize(), color = currentTheme.bg) {
                     Box(modifier = Modifier.fillMaxSize()) {
                         Column(
@@ -1596,15 +1644,17 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
 
-                            SelectionContainer {
-                                Text(
-                                    text = annotatedText,
-                                    fontSize = fontSize.sp,
-                                    lineHeight = (fontSize * 1.58f).sp,
-                                    fontFamily = currentFont.family,
-                                    textAlign = currentAlign.align,
-                                    color = currentTheme.text
-                                )
+                            CompositionLocalProvider(LocalTextToolbar provides customTextToolbar) {
+                                SelectionContainer {
+                                    Text(
+                                        text = annotatedText,
+                                        fontSize = fontSize.sp,
+                                        lineHeight = (fontSize * 1.58f).sp,
+                                        fontFamily = currentFont.family,
+                                        textAlign = currentAlign.align,
+                                        color = currentTheme.text
+                                    )
+                                }
                             }
 
                             if (readingViewMode == ReadingViewMode.PAGED && pages.size > 1) {
@@ -1652,11 +1702,11 @@ class MainActivity : ComponentActivity() {
                         }
 
                         if (showStudyBanner) {
-                            val quickColors = (ReadingEnhancementManager.presetPaletteColors + customColors).take(4)
+                            val quickColors = (ReadingEnhancementManager.presetPaletteColors + customColors).take(5)
                             Surface(
                                 modifier = Modifier
                                     .align(Alignment.TopCenter)
-                                    .padding(top = 70.dp, start = 16.dp, end = 16.dp),
+                                    .padding(top = 70.dp, start = 12.dp, end = 12.dp),
                                 shape = RoundedCornerShape(24.dp),
                                 color = Color(0xFF1E1E2E),
                                 shadowElevation = 10.dp
@@ -1664,7 +1714,7 @@ class MainActivity : ComponentActivity() {
                                 Row(
                                     modifier = Modifier
                                         .horizontalScroll(rememberScrollState())
-                                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
@@ -1675,6 +1725,7 @@ class MainActivity : ComponentActivity() {
                                                 .clip(CircleShape)
                                                 .background(cItem.toComposeColor())
                                                 .clickable {
+                                                    selectedColorKey = cItem.id
                                                     val item = StudyAnnotation(
                                                         bookTitle = currentBook.title,
                                                         chapterIndex = currentChapterIndex,
@@ -1687,6 +1738,24 @@ class MainActivity : ComponentActivity() {
                                                     showStudyBanner = false
                                                 }
                                         )
+                                    }
+                                    TextButton(
+                                        onClick = {
+                                            val item = StudyAnnotation(
+                                                bookTitle = currentBook.title,
+                                                chapterIndex = currentChapterIndex,
+                                                chapterTitle = activeChapter.title,
+                                                selectedText = draftSelection.trim(),
+                                                colorName = selectedColorKey,
+                                                isUnderline = true
+                                            )
+                                            annotations = listOf(item) + annotations
+                                            ReaderStorage.saveAnnotations(context, annotations)
+                                            showStudyBanner = false
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                                    ) {
+                                        Text("Sublinhar", color = Color.White, fontSize = 12.sp, maxLines = 1, softWrap = false)
                                     }
                                     IconButton(
                                         onClick = {
@@ -1703,11 +1772,14 @@ class MainActivity : ComponentActivity() {
                                     IconButton(onClick = { openDictionaryOrTranslate(draftSelection) }, modifier = Modifier.size(32.dp)) {
                                         Icon(Icons.Rounded.Translate, contentDescription = "Dicionário / Tradutor", tint = Color.White)
                                     }
-                                    IconButton(onClick = {
-                                        researchQueryInput = draftSelection
-                                        showResearchHubDialog = true
-                                        showStudyBanner = false
-                                    }, modifier = Modifier.size(32.dp)) {
+                                    IconButton(
+                                        onClick = {
+                                            researchQueryInput = draftSelection
+                                            showResearchHubDialog = true
+                                            showStudyBanner = false
+                                        },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
                                         Icon(Icons.Rounded.TravelExplore, contentDescription = "IA / Google", tint = Color.White)
                                     }
                                     IconButton(onClick = { showStudyBanner = false }, modifier = Modifier.size(28.dp)) {
@@ -2374,7 +2446,7 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
                                     item {
-                                        Text("Motor de Voz (TTS / Neural / Online)", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
+                                        Text("Motor de Voz (TTS / Neural / Online / Hugging Face)", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
                                         Spacer(modifier = Modifier.height(6.dp))
                                         Row(
                                             modifier = Modifier.horizontalScroll(rememberScrollState()),
@@ -2430,37 +2502,106 @@ class MainActivity : ComponentActivity() {
                                             )
                                         }
                                         Text(
-                                            text = "Modelos Piper (.onnx) locais encontrados: $piperModelsCount",
+                                            text = "Modelos locais / clones guardados: $downloadedModelsCount (Piper .onnx: $piperModelsCount)",
                                             fontSize = 12.sp,
                                             color = currentTheme.text.copy(alpha = 0.75f)
                                         )
-                                        if (selectedProvider == VoiceProviderType.EDGE_ONLINE || selectedProvider == VoiceProviderType.KOKORO_POCKET_NEURAL) {
-                                            Spacer(modifier = Modifier.height(6.dp))
-                                            OutlinedTextField(
-                                                value = customOnlineEndpoint,
-                                                onValueChange = {
-                                                    customOnlineEndpoint = it
-                                                    syncVoiceEngineConfig()
-                                                },
-                                                label = { Text("URL do serviço de voz online / Edge") },
-                                                singleLine = true,
-                                                modifier = Modifier.fillMaxWidth()
-                                            )
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                            ) {
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = "Baixar modelos diretamente do Hugging Face:",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            color = currentTheme.text
+                                        )
+                                        Row(
+                                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            VoiceEngineManager.HUGGINGFACE_PRESETS.forEach { preset ->
                                                 OutlinedButton(onClick = {
+                                                    voiceDownloadStatus = "A baixar ${preset.title}..."
                                                     scope.launch {
-                                                        val ok = voiceEngine.testOnlineEndpoint(customOnlineEndpoint)
-                                                        onlineTestResult = if (ok) "Ligação ao serviço de voz ativa." else "Sem resposta ou URL inválida."
+                                                        val mainRes = voiceEngine.downloadFileFromUrl(
+                                                            preset.downloadUrl,
+                                                            preset.targetSubdir,
+                                                            preset.fileName
+                                                        )
+                                                        if (preset.companionUrl != null && preset.companionFileName != null) {
+                                                            voiceEngine.downloadFileFromUrl(
+                                                                preset.companionUrl,
+                                                                preset.targetSubdir,
+                                                                preset.companionFileName
+                                                            )
+                                                        }
+                                                        refreshNeuralCounts()
+                                                        voiceDownloadStatus = if (mainRes.isSuccess) {
+                                                            "Concluído: ${preset.fileName}"
+                                                        } else {
+                                                            "Erro: ${mainRes.exceptionOrNull()?.message}"
+                                                        }
                                                     }
                                                 }) {
-                                                    Text("Testar ligação", maxLines = 1, softWrap = false)
+                                                    Text(preset.category, maxLines = 1, softWrap = false)
                                                 }
-                                                if (onlineTestResult != null) {
-                                                    Text(onlineTestResult!!, fontSize = 12.sp, color = currentTheme.text)
+                                            }
+                                        }
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        OutlinedTextField(
+                                            value = voiceZipSourceInput,
+                                            onValueChange = { voiceZipSourceInput = it },
+                                            label = { Text("URL ou caminho local do .zip (Clonador / Voz)") },
+                                            singleLine = true,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                        OutlinedButton(onClick = {
+                                            voiceDownloadStatus = "A baixar e extrair .zip..."
+                                            scope.launch {
+                                                val res = voiceEngine.downloadAndExtractVoiceZip(
+                                                    zipUrlOrLocalPath = voiceZipSourceInput,
+                                                    voiceName = "clone_${System.currentTimeMillis()}"
+                                                )
+                                                refreshNeuralCounts()
+                                                voiceDownloadStatus = if (res.isSuccess) {
+                                                    "Pacote .zip extraído (${voiceEngine.activeClonedVoiceName})"
+                                                } else {
+                                                    "Erro .zip: ${res.exceptionOrNull()?.message}"
                                                 }
+                                            }
+                                        }) {
+                                            Text("Baixar / Extrair .ZIP Clonador", maxLines = 1, softWrap = false)
+                                        }
+                                        if (voiceDownloadStatus != null) {
+                                            Text(voiceDownloadStatus!!, fontSize = 12.sp, color = Color(0xFF4F46E5))
+                                        }
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        OutlinedTextField(
+                                            value = customOnlineEndpoint,
+                                            onValueChange = {
+                                                customOnlineEndpoint = it
+                                                syncVoiceEngineConfig()
+                                            },
+                                            label = { Text("URL do serviço de voz online / Edge (pré-definido)") },
+                                            singleLine = true,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            OutlinedButton(onClick = {
+                                                scope.launch {
+                                                    val ok = voiceEngine.testOnlineEndpoint(customOnlineEndpoint)
+                                                    onlineTestResult = if (ok) {
+                                                        "Ligação ativa (${voiceEngine.customOnlineEndpointUrl.take(36)}...)"
+                                                    } else {
+                                                        "Sem resposta ou sem rede."
+                                                    }
+                                                }
+                                            }) {
+                                                Text("Testar ligação", maxLines = 1, softWrap = false)
+                                            }
+                                            if (onlineTestResult != null) {
+                                                Text(onlineTestResult!!, fontSize = 12.sp, color = currentTheme.text)
                                             }
                                         }
                                         if (availableVoices.isNotEmpty()) {
