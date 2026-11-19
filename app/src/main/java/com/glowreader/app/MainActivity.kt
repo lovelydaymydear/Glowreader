@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.Voice
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -58,19 +59,21 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.util.Locale
 
-private val GlowMintAccent = Color(0xFF4CA69E)
-private val GlowMintBright = Color(0xFF52B788)
-private val GlowDeepForest = Color(0xFF0E1D17)
-private val GlowForestSurface = Color(0xFF162B23)
+private val ReaderTealAccent = Color(0xFF55A89F)
+private val ReaderDarkCanvas = Color(0xFF0A1410)
+private val ReaderDarkSheet = Color(0xFF14211B)
+private val ReaderDarkPill = Color(0xFF1C2D25)
 
 enum class ReaderTheme(
     val label: String,
+    val pageTag: String,
     val bg: Color,
     val text: Color,
     val highlightBg: Color,
@@ -78,11 +81,11 @@ enum class ReaderTheme(
     val barBg: Color,
     val accent: Color
 ) {
-    FOREST("Theme Verde", GlowDeepForest, Color(0xFFE6EFEA), Color(0xFF2D6A56), Color(0xFFFFFFFF), GlowForestSurface, GlowMintAccent),
-    DARK("Escuro", Color(0xFF121212), Color(0xFFE6E8E7), Color(0xFF2B4C45), Color(0xFFFFFFFF), Color(0xFF1C211F), GlowMintBright),
-    SEPIA("Sépia", Color(0xFFF4ECD8), Color(0xFF3E3224), Color(0xFFE6C27A), Color(0xFF1F1810), Color(0xFFEBE0C5), Color(0xFF3B7A6B)),
-    PAPYRUS("Papyrus", Color(0xFFF3E6C8), Color(0xFF2C2318), Color(0xFFD9B670), Color(0xFF1A140C), Color(0xFFE8D8B5), Color(0xFF3A7366)),
-    LIGHT("Claro", Color(0xFFF6F8F7), Color(0xFF1A221F), Color(0xFFB7E4C7), Color(0xFF081C15), Color(0xFFFFFFFF), Color(0xFF2D6A4F))
+    FOREST("Theme Verde", "TEMA", ReaderDarkCanvas, Color(0xFFE3ECE7), Color(0xFF23473C), Color(0xFFFFFFFF), ReaderDarkSheet, ReaderTealAccent),
+    LIGHT("Claro", "TINTA", Color(0xFFF6F7F6), Color(0xFF18201C), Color(0xFFCDE8DF), Color(0xFF0A1410), Color(0xFFFFFFFF), Color(0xFF2E7D6B)),
+    PAPYRUS("Papyrus", "PAPYRUS", Color(0xFFEADDBB), Color(0xFF2A2217), Color(0xFFD5B77A), Color(0xFF1A140C), Color(0xFFDFCFA9), Color(0xFF3E7A6C)),
+    DARK("Escuro", "CREPÚSCULO", Color(0xFF121514), Color(0xFFDCE2DF), Color(0xFF28423A), Color(0xFFFFFFFF), Color(0xFF1B201E), ReaderTealAccent),
+    SEPIA("Sépia", "SÉPIA", Color(0xFFF4ECD8), Color(0xFF3E3224), Color(0xFFE6C27A), Color(0xFF1F1810), Color(0xFFEBE0C5), Color(0xFF3B7A6B))
 }
 
 enum class LibraryLayoutMode(val label: String) {
@@ -115,11 +118,14 @@ class MainActivity : ComponentActivity() {
 
             var currentTab by remember { mutableIntStateOf(0) }
             var currentTheme by remember { mutableStateOf(ReaderTheme.FOREST) }
-            var fontSize by remember { mutableFloatStateOf(19f) }
+            var fontSize by remember { mutableFloatStateOf(20f) }
             var currentFont by remember { mutableStateOf(ReaderFont.SERIF) }
-            var currentAlign by remember { mutableStateOf(ReaderAlignment.LEFT) }
+            var justifyText by remember { mutableStateOf(true) }
             var lineHeightMultiplier by remember { mutableFloatStateOf(1.62f) }
-            var horizontalPaddingDp by remember { mutableIntStateOf(22) }
+            var horizontalPaddingDp by remember { mutableIntStateOf(20) }
+            var paragraphSpaced by remember { mutableStateOf(true) }
+            var warmthPercent by remember { mutableIntStateOf(0) }
+            var keepScreenOn by remember { mutableStateOf(false) }
 
             var libraryLayoutMode by remember { mutableStateOf(LibraryLayoutMode.GRID) }
             var libraryVersion by remember { mutableIntStateOf(0) }
@@ -215,6 +221,8 @@ class MainActivity : ComponentActivity() {
 
             var isPlaying by remember { mutableStateOf(false) }
             var speechRate by remember { mutableFloatStateOf(1.0f) }
+            var forThisBookOnly by remember { mutableStateOf(false) }
+            var sleepTimerMinutes by remember { mutableIntStateOf(0) }
             var activeSentenceRange by remember { mutableStateOf<IntRange?>(null) }
             var activeWordRange by remember { mutableStateOf<IntRange?>(null) }
 
@@ -249,6 +257,7 @@ class MainActivity : ComponentActivity() {
             DisposableEffect(voiceEngine) {
                 onDispose {
                     ReaderLayoutController.applyFullscreenSystemBars(activity, false)
+                    activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     voiceEngine.release()
                 }
             }
@@ -281,6 +290,13 @@ class MainActivity : ComponentActivity() {
                     onPlaybackState = { playing -> isPlaying = playing },
                     onChapterFinished = onFinished
                 )
+            }
+
+            LaunchedEffect(isPlaying, sleepTimerMinutes) {
+                if (isPlaying && sleepTimerMinutes > 0) {
+                    delay(sleepTimerMinutes * 60_000L)
+                    stopAudio()
+                }
             }
 
             fun openResearchTarget(target: ResearchToolTarget, query: String) {
@@ -496,11 +512,11 @@ class MainActivity : ComponentActivity() {
                 val isPdf = bookToPromptReflow.format.equals("PDF", ignoreCase = true)
                 AlertDialog(
                     onDismissRequest = { pendingOpenBookMeta = null },
-                    containerColor = currentTheme.barBg,
+                    containerColor = ReaderDarkSheet,
                     title = {
                         Text(
                             text = "Abrir: $cleanPromptTitle",
-                            color = currentTheme.text,
+                            color = Color(0xFFE3ECE7),
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -513,13 +529,13 @@ class MainActivity : ComponentActivity() {
                                 } else {
                                     "Escolhe como queres apresentar este livro ao abrir:"
                                 },
-                                color = currentTheme.text.copy(alpha = 0.85f),
+                                color = Color(0xFFE3ECE7).copy(alpha = 0.85f),
                                 fontSize = 13.sp
                             )
                             ReflowMode.entries.forEach { mode ->
                                 val isRecommended = isPdf && mode == ReflowMode.AUTO_ADAPT
                                 Card(
-                                    colors = CardDefaults.cardColors(containerColor = currentTheme.bg),
+                                    colors = CardDefaults.cardColors(containerColor = ReaderDarkCanvas),
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clickable {
@@ -532,10 +548,10 @@ class MainActivity : ComponentActivity() {
                                         Text(
                                             text = if (isRecommended) "${mode.label} (Recomendado PDF)" else mode.label,
                                             fontWeight = FontWeight.Bold,
-                                            color = currentTheme.accent,
+                                            color = ReaderTealAccent,
                                             fontSize = 14.sp
                                         )
-                                        Text(mode.description, color = currentTheme.text.copy(alpha = 0.8f), fontSize = 12.sp)
+                                        Text(mode.description, color = Color(0xFFE3ECE7).copy(alpha = 0.8f), fontSize = 12.sp)
                                     }
                                 }
                             }
@@ -543,19 +559,19 @@ class MainActivity : ComponentActivity() {
                     },
                     confirmButton = {
                         Button(
-                            colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color.White),
+                            colors = ButtonDefaults.buttonColors(containerColor = ReaderTealAccent, contentColor = Color(0xFF07120E)),
                             onClick = {
                                 val target = bookToPromptReflow
                                 pendingOpenBookMeta = null
                                 launchBookWithReflow(target, defaultReflowMode)
                             }
                         ) {
-                            Text("Abrir padrão", maxLines = 1, softWrap = false)
+                            Text("Abrir padrão", fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
                         }
                     },
                     dismissButton = {
                         TextButton(onClick = { pendingOpenBookMeta = null }) {
-                            Text("Cancelar", color = currentTheme.text, maxLines = 1, softWrap = false)
+                            Text("Cancelar", color = Color(0xFFE3ECE7), maxLines = 1, softWrap = false)
                         }
                     }
                 )
@@ -1070,11 +1086,24 @@ class MainActivity : ComponentActivity() {
                 )
             }
 
+            LaunchedEffect(currentBook, keepScreenOn) {
+                if (currentBook != null && keepScreenOn) {
+                    activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                } else {
+                    activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                }
+            }
+
             if (currentBook != null && currentMeta != null) {
                 val scrollState = rememberScrollState(initial = currentMeta.lastScrollPosition)
                 val activeChapter = currentBook.chapters.getOrElse(currentChapterIndex) { BookChapter("Vazio", "") }
-                val baseChapterText = remember(activeChapter.content, activeReflowMode) {
-                    ReadingEnhancementManager.applyReflow(activeChapter.content, activeReflowMode)
+                val baseChapterText = remember(activeChapter.content, activeReflowMode, paragraphSpaced) {
+                    val reflowed = ReadingEnhancementManager.applyReflow(activeChapter.content, activeReflowMode)
+                    if (paragraphSpaced) {
+                        reflowed
+                    } else {
+                        reflowed.replace(Regex("\n\\s*\n"), "\n")
+                    }
                 }
                 val textContent = if (useTranslatedText && translatedChaptersMap.containsKey(currentChapterIndex)) {
                     translatedChaptersMap[currentChapterIndex] ?: baseChapterText
@@ -1083,13 +1112,28 @@ class MainActivity : ComponentActivity() {
                 }
 
                 val pages = remember(textContent, fontSize) {
-                    val dynamicChars = (2200f * (19f / fontSize.coerceIn(12f, 36f))).toInt()
+                    val dynamicChars = (2200f * (20f / fontSize.coerceIn(13f, 32f))).toInt()
                     ReaderLayoutController.paginateChapter(textContent, dynamicChars)
                 }
                 var currentPageIndex by remember(currentChapterIndex, pages.size) { mutableIntStateOf(0) }
 
                 var barsVisible by remember(currentChapterIndex, barsBehaviorMode) {
                     mutableStateOf(barsBehaviorMode != BarsBehaviorMode.TAP_TO_TOGGLE)
+                }
+
+                var autoScrollEnabled by remember { mutableStateOf(false) }
+                var autoScrollLinesPerMinute by remember { mutableIntStateOf(24) }
+
+                LaunchedEffect(autoScrollEnabled, autoScrollLinesPerMinute, readingViewMode) {
+                    while (autoScrollEnabled && readingViewMode == ReadingViewMode.SCROLL && scrollState.maxValue > 0) {
+                        val stepDelayMs = (60_000L / autoScrollLinesPerMinute.coerceIn(6, 80)).coerceAtLeast(120L)
+                        delay(stepDelayMs)
+                        val nextPos = (scrollState.value + 16).coerceAtMost(scrollState.maxValue)
+                        scrollState.scrollTo(nextPos)
+                        if (nextPos >= scrollState.maxValue) {
+                            autoScrollEnabled = false
+                        }
+                    }
                 }
 
                 LaunchedEffect(scrollState.isScrollInProgress, barsBehaviorMode) {
@@ -1099,6 +1143,8 @@ class MainActivity : ComponentActivity() {
                 }
 
                 var showTocSheet by remember { mutableStateOf(false) }
+                var showListenSheet by remember { mutableStateOf(false) }
+                var listenSheetTab by remember { mutableIntStateOf(0) } // 0 = Ouvir, 1 = Ler
                 var showTypeSheet by remember { mutableStateOf(false) }
                 var showNotebookSheet by remember { mutableStateOf(false) }
                 var showNoteDialog by remember { mutableStateOf(false) }
@@ -1108,8 +1154,10 @@ class MainActivity : ComponentActivity() {
                 var showStudyBanner by remember { mutableStateOf(false) }
 
                 fun closeReaderBackToLibrary() {
+                    autoScrollEnabled = false
                     stopAudio()
                     ReaderLayoutController.applyFullscreenSystemBars(activity, false)
+                    activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     LibraryManager.updateReadingProgress(context, currentMeta.id, currentChapterIndex, scrollState.value)
                     refreshLibraryAndOrg()
                     activeBookContent = null
@@ -1123,6 +1171,7 @@ class MainActivity : ComponentActivity() {
                         showNoteDialog -> showNoteDialog = false
                         showTranslateSheet -> if (!isTranslating) showTranslateSheet = false
                         showSavedAudioSheet -> showSavedAudioSheet = false
+                        showListenSheet -> showListenSheet = false
                         showTypeSheet -> showTypeSheet = false
                         showNotebookSheet -> showNotebookSheet = false
                         showTocSheet -> showTocSheet = false
@@ -1160,10 +1209,365 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                @Composable
+                fun SheetHandle() {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 6.dp, bottom = 10.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(width = 36.dp, height = 4.dp)
+                                .clip(CircleShape)
+                                .background(currentTheme.text.copy(alpha = 0.25f))
+                        )
+                    }
+                }
+
+                @Composable
+                fun SpeedSectionContent() {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            text = "Velocidade",
+                            fontFamily = FontFamily.Serif,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = currentTheme.text
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                shape = CircleShape,
+                                color = ReaderDarkPill,
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .clickable {
+                                        speechRate = (speechRate - 0.25f).coerceIn(0.5f, 2.5f)
+                                        if (isPlaying) {
+                                            stopAudio()
+                                            startAudio(textContent)
+                                        }
+                                    }
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text("−", fontSize = 20.sp, color = currentTheme.text)
+                                }
+                            }
+                            Text(
+                                text = "${speechRate}×",
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = currentTheme.text
+                            )
+                            Surface(
+                                shape = CircleShape,
+                                color = ReaderDarkPill,
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .clickable {
+                                        speechRate = (speechRate + 0.25f).coerceIn(0.5f, 2.5f)
+                                        if (isPlaying) {
+                                            stopAudio()
+                                            startAudio(textContent)
+                                        }
+                                    }
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text("+", fontSize = 20.sp, color = currentTheme.text)
+                                }
+                            }
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(24.dp),
+                            color = ReaderDarkPill,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                listOf(0.75f, 1.0f, 1.25f, 1.5f, 2.0f).forEach { rateOpt ->
+                                    val selected = kotlin.math.abs(speechRate - rateOpt) < 0.01f
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(20.dp))
+                                            .background(if (selected) ReaderTealAccent else Color.Transparent)
+                                            .clickable {
+                                                speechRate = rateOpt
+                                                if (isPlaying) {
+                                                    stopAudio()
+                                                    startAudio(textContent)
+                                                }
+                                            }
+                                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = "${rateOpt}×",
+                                            fontSize = 13.sp,
+                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (selected) Color(0xFF07120E) else currentTheme.text,
+                                            maxLines = 1,
+                                            softWrap = false
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Apenas neste livro", fontSize = 15.sp, color = currentTheme.text)
+                            Switch(
+                                checked = forThisBookOnly,
+                                onCheckedChange = { forThisBookOnly = it },
+                                colors = SwitchDefaults.colors(checkedTrackColor = ReaderTealAccent)
+                            )
+                        }
+                    }
+                }
+
+                if (showListenSheet) {
+                    ModalBottomSheet(
+                        onDismissRequest = { showListenSheet = false },
+                        containerColor = ReaderDarkSheet,
+                        dragHandle = null
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .verticalScroll(rememberScrollState())
+                                .padding(horizontal = 20.dp, vertical = 10.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            SheetHandle()
+
+                            Surface(
+                                shape = RoundedCornerShape(26.dp),
+                                color = ReaderDarkPill,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(modifier = Modifier.fillMaxWidth().padding(4.dp)) {
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(22.dp))
+                                            .background(if (listenSheetTab == 0) ReaderTealAccent else Color.Transparent)
+                                            .clickable { listenSheetTab = 0 }
+                                            .padding(vertical = 10.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = "Ouvir",
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = if (listenSheetTab == 0) Color(0xFF07120E) else Color(0xFFE3ECE7)
+                                        )
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(22.dp))
+                                            .background(if (listenSheetTab == 1) ReaderTealAccent else Color.Transparent)
+                                            .clickable { listenSheetTab = 1 }
+                                            .padding(vertical = 10.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = "Ler",
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = if (listenSheetTab == 1) Color(0xFF07120E) else Color(0xFFE3ECE7)
+                                        )
+                                    }
+                                }
+                            }
+
+                            if (listenSheetTab == 0) {
+                                SpeedSectionContent()
+
+                                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    Text(
+                                        text = "Temporizador de sono",
+                                        fontFamily = FontFamily.Serif,
+                                        fontSize = 20.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFFE3ECE7)
+                                    )
+                                    Surface(
+                                        shape = RoundedCornerShape(24.dp),
+                                        color = ReaderDarkPill,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(4.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            listOf(0 to "Desligado", 15 to "15 min", 30 to "30 min", 60 to "1 hora").forEach { (mins, lbl) ->
+                                                val selected = sleepTimerMinutes == mins
+                                                Box(
+                                                    modifier = Modifier
+                                                        .clip(RoundedCornerShape(20.dp))
+                                                        .background(if (selected) ReaderTealAccent else Color.Transparent)
+                                                        .clickable { sleepTimerMinutes = mins }
+                                                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    Text(
+                                                        text = lbl,
+                                                        fontSize = 12.sp,
+                                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                                        color = if (selected) Color(0xFF07120E) else Color(0xFFE3ECE7),
+                                                        maxLines = 1,
+                                                        softWrap = false
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "Voz",
+                                            fontFamily = FontFamily.Serif,
+                                            fontSize = 20.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFFE3ECE7)
+                                        )
+                                        Text(
+                                            text = "LIVRO: PORTUGUÊS",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = Color(0xFFE3ECE7).copy(alpha = 0.6f)
+                                        )
+                                    }
+
+                                    Surface(
+                                        shape = RoundedCornerShape(18.dp),
+                                        color = ReaderDarkPill,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(14.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(Icons.Rounded.RecordVoiceOver, contentDescription = null, tint = Color(0xFFE3ECE7))
+                                            Spacer(modifier = Modifier.width(12.dp))
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = selectedVoiceName.ifBlank { "Português (${selectedLocale.displayLanguage})" },
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 14.sp,
+                                                    color = Color(0xFFE3ECE7),
+                                                    maxLines = 2,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                Text(
+                                                    text = if (selectedProvider == VoiceProviderType.ANDROID_SYSTEM) "Voz do sistema" else selectedProvider.title,
+                                                    fontSize = 12.sp,
+                                                    color = Color(0xFFE3ECE7).copy(alpha = 0.65f)
+                                                )
+                                            }
+                                            Surface(
+                                                shape = RoundedCornerShape(20.dp),
+                                                color = Color(0xFF283D34),
+                                                modifier = Modifier.clickable {
+                                                    showListenSheet = false
+                                                    activeBookContent = null
+                                                    activeBookMeta = null
+                                                    currentTab = 3
+                                                }
+                                            ) {
+                                                Text(
+                                                    text = "Alterar",
+                                                    color = ReaderTealAccent,
+                                                    fontSize = 13.sp,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                                                    maxLines = 1,
+                                                    softWrap = false
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    Text(
+                                        text = "Leitura e navegação",
+                                        fontFamily = FontFamily.Serif,
+                                        fontSize = 20.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFFE3ECE7)
+                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                        FilterChip(
+                                            selected = readingViewMode == ReadingViewMode.SCROLL,
+                                            onClick = { readingViewMode = ReadingViewMode.SCROLL },
+                                            label = { Text("Rolagem", maxLines = 1, softWrap = false) }
+                                        )
+                                        FilterChip(
+                                            selected = readingViewMode == ReadingViewMode.PAGED,
+                                            onClick = { readingViewMode = ReadingViewMode.PAGED },
+                                            label = { Text("Páginas", maxLines = 1, softWrap = false) }
+                                        )
+                                    }
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text("Rolagem automática", fontSize = 15.sp, color = Color(0xFFE3ECE7))
+                                        Switch(
+                                            checked = autoScrollEnabled,
+                                            onCheckedChange = {
+                                                autoScrollEnabled = it
+                                                if (it) stopAudio()
+                                            },
+                                            colors = SwitchDefaults.colors(checkedTrackColor = ReaderTealAccent)
+                                        )
+                                    }
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text("Justificar texto", fontSize = 15.sp, color = Color(0xFFE3ECE7))
+                                        Switch(
+                                            checked = justifyText,
+                                            onCheckedChange = { justifyText = it },
+                                            colors = SwitchDefaults.colors(checkedTrackColor = ReaderTealAccent)
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(18.dp))
+                        }
+                    }
+                }
+
                 if (showTranslateSheet) {
                     ModalBottomSheet(
                         onDismissRequest = { if (!isTranslating) showTranslateSheet = false },
-                        containerColor = currentTheme.barBg
+                        containerColor = ReaderDarkSheet
                     ) {
                         Column(
                             modifier = Modifier
@@ -1175,7 +1579,7 @@ class MainActivity : ComponentActivity() {
                                 text = "Traduzir Capítulo ou Livro Inteiro",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 18.sp,
-                                color = currentTheme.text
+                                color = Color(0xFFE3ECE7)
                             )
                             Row(
                                 modifier = Modifier.horizontalScroll(rememberScrollState()),
@@ -1194,7 +1598,7 @@ class MainActivity : ComponentActivity() {
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 Button(
-                                    colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color.White),
+                                    colors = ButtonDefaults.buttonColors(containerColor = ReaderTealAccent, contentColor = Color(0xFF07120E)),
                                     onClick = {
                                         isTranslating = true
                                         translationProgressText = "A traduzir capítulo atual..."
@@ -1241,7 +1645,7 @@ class MainActivity : ComponentActivity() {
                                     },
                                     enabled = !isTranslating
                                 ) {
-                                    Text("Traduzir livro todo", color = currentTheme.text, maxLines = 1, softWrap = false)
+                                    Text("Traduzir livro todo", color = Color(0xFFE3ECE7), maxLines = 1, softWrap = false)
                                 }
                             }
                             if (translatedChaptersMap.isNotEmpty()) {
@@ -1250,12 +1654,12 @@ class MainActivity : ComponentActivity() {
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text("Exibir versão traduzida", color = currentTheme.text)
+                                    Text("Exibir versão traduzida", color = Color(0xFFE3ECE7))
                                     Switch(checked = useTranslatedText, onCheckedChange = { useTranslatedText = it })
                                 }
                             }
                             if (translationProgressText != null) {
-                                Text(translationProgressText!!, fontSize = 12.sp, color = currentTheme.accent)
+                                Text(translationProgressText!!, fontSize = 12.sp, color = ReaderTealAccent)
                             }
                             Spacer(modifier = Modifier.height(20.dp))
                         }
@@ -1265,7 +1669,7 @@ class MainActivity : ComponentActivity() {
                 if (showSavedAudioSheet) {
                     ModalBottomSheet(
                         onDismissRequest = { showSavedAudioSheet = false },
-                        containerColor = currentTheme.barBg
+                        containerColor = ReaderDarkSheet
                     ) {
                         Column(
                             modifier = Modifier
@@ -1277,15 +1681,10 @@ class MainActivity : ComponentActivity() {
                                 text = "Áudios Guardados com Sincronização",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 18.sp,
-                                color = currentTheme.text
-                            )
-                            Text(
-                                text = "Reproduz o áudio guardado enquanto o leitor acompanha e destaca o texto.",
-                                fontSize = 12.sp,
-                                color = currentTheme.text.copy(alpha = 0.75f)
+                                color = Color(0xFFE3ECE7)
                             )
                             Button(
-                                colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color.White),
+                                colors = ButtonDefaults.buttonColors(containerColor = ReaderTealAccent, contentColor = Color(0xFF07120E)),
                                 onClick = {
                                     isExportingAudio = true
                                     audioStatusMessage = "A gerar áudio sincronizado..."
@@ -1319,19 +1718,14 @@ class MainActivity : ComponentActivity() {
                             }
 
                             if (audioStatusMessage != null) {
-                                Text(
-                                    text = audioStatusMessage!!,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = currentTheme.accent
-                                )
+                                Text(audioStatusMessage!!, fontSize = 12.sp, color = ReaderTealAccent)
                             }
 
                             if (savedAudioTracks.isEmpty()) {
                                 Text(
                                     text = "Ainda não tens áudios guardados.",
                                     fontSize = 13.sp,
-                                    color = currentTheme.text.copy(alpha = 0.7f),
+                                    color = Color(0xFFE3ECE7).copy(alpha = 0.7f),
                                     modifier = Modifier.padding(vertical = 12.dp)
                                 )
                             } else {
@@ -1341,7 +1735,7 @@ class MainActivity : ComponentActivity() {
                                 ) {
                                     items(savedAudioTracks, key = { it.id }) { track ->
                                         Card(
-                                            colors = CardDefaults.cardColors(containerColor = currentTheme.bg),
+                                            colors = CardDefaults.cardColors(containerColor = ReaderDarkCanvas),
                                             modifier = Modifier.fillMaxWidth()
                                         ) {
                                             Row(
@@ -1352,11 +1746,11 @@ class MainActivity : ComponentActivity() {
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
                                                 Column(modifier = Modifier.weight(1f)) {
-                                                    Text(track.chapterTitle, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = currentTheme.text)
+                                                    Text(track.chapterTitle, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color(0xFFE3ECE7))
                                                     Text(
                                                         text = "${track.bookTitle} • ${track.segments.size} trechos sincronizados",
                                                         fontSize = 11.sp,
-                                                        color = currentTheme.text.copy(alpha = 0.7f)
+                                                        color = Color(0xFFE3ECE7).copy(alpha = 0.7f)
                                                     )
                                                 }
                                                 IconButton(onClick = {
@@ -1371,7 +1765,7 @@ class MainActivity : ComponentActivity() {
                                                         onPlaybackState = { isPlaying = it }
                                                     )
                                                 }) {
-                                                    Icon(Icons.Rounded.PlayArrow, contentDescription = "Ouvir sincronizado", tint = currentTheme.accent)
+                                                    Icon(Icons.Rounded.PlayArrow, contentDescription = "Ouvir sincronizado", tint = ReaderTealAccent)
                                                 }
                                             }
                                         }
@@ -1386,125 +1780,495 @@ class MainActivity : ComponentActivity() {
                 if (showTypeSheet) {
                     ModalBottomSheet(
                         onDismissRequest = { showTypeSheet = false },
-                        containerColor = currentTheme.barBg
+                        containerColor = ReaderDarkSheet,
+                        dragHandle = null
                     ) {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .verticalScroll(rememberScrollState())
                                 .padding(horizontal = 20.dp, vertical = 10.dp),
-                            verticalArrangement = Arrangement.spacedBy(14.dp)
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
-                            Text(
-                                text = "Aparência e Leitura",
-                                fontFamily = FontFamily.Serif,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 20.sp,
-                                color = currentTheme.text
-                            )
+                            SheetHandle()
 
-                            Text("Tema da página", fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = currentTheme.text)
+                            Text(
+                                text = "Luz",
+                                fontFamily = FontFamily.Serif,
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFE3ECE7)
+                            )
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text("Calor", fontSize = 15.sp, color = Color(0xFFE3ECE7))
+                                    Text(
+                                        text = if (warmthPercent == 0) "Desligado" else "$warmthPercent%",
+                                        fontSize = 15.sp,
+                                        color = ReaderTealAccent
+                                    )
+                                }
+                                Slider(
+                                    value = warmthPercent.toFloat(),
+                                    onValueChange = { warmthPercent = it.toInt() },
+                                    valueRange = 0f..100f
+                                )
+                                Text(
+                                    text = "Tom âmbar sobre a página para leitura noturna.",
+                                    fontSize = 13.sp,
+                                    color = Color(0xFFE3ECE7).copy(alpha = 0.65f)
+                                )
+                            }
+
+                            Text(
+                                text = "Página",
+                                fontFamily = FontFamily.Serif,
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFE3ECE7)
+                            )
                             Row(
                                 modifier = Modifier.horizontalScroll(rememberScrollState()),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                ReaderTheme.entries.forEach { t ->
-                                    val selected = currentTheme == t
+                                listOf(ReaderTheme.FOREST, ReaderTheme.LIGHT, ReaderTheme.PAPYRUS, ReaderTheme.DARK).forEach { themeCard ->
+                                    val isSelected = currentTheme == themeCard
                                     Surface(
-                                        shape = RoundedCornerShape(12.dp),
-                                        color = t.bg,
+                                        shape = RoundedCornerShape(14.dp),
+                                        color = themeCard.bg,
                                         modifier = Modifier
-                                            .size(width = 76.dp, height = 54.dp)
+                                            .size(width = 82.dp, height = 64.dp)
                                             .border(
-                                                width = if (selected) 2.dp else 1.dp,
-                                                color = if (selected) currentTheme.accent else t.text.copy(alpha = 0.25f),
-                                                shape = RoundedCornerShape(12.dp)
+                                                width = if (isSelected) 2.dp else 1.dp,
+                                                color = if (isSelected) ReaderTealAccent else Color.White.copy(alpha = 0.2f),
+                                                shape = RoundedCornerShape(14.dp)
                                             )
-                                            .clickable { currentTheme = t }
+                                            .clickable { currentTheme = themeCard }
                                     ) {
                                         Column(
-                                            modifier = Modifier.fillMaxSize().padding(6.dp),
+                                            modifier = Modifier.fillMaxSize().padding(8.dp),
                                             verticalArrangement = Arrangement.SpaceBetween,
                                             horizontalAlignment = Alignment.CenterHorizontally
                                         ) {
-                                            Text("Aa", fontFamily = FontFamily.Serif, fontWeight = FontWeight.Bold, color = t.text, fontSize = 15.sp)
-                                            Text(t.label.uppercase(), color = t.text.copy(alpha = 0.8f), fontSize = 9.sp, maxLines = 1, softWrap = false)
+                                            Text(
+                                                text = "Aa",
+                                                fontFamily = FontFamily.Serif,
+                                                fontSize = 18.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = themeCard.text
+                                            )
+                                            Text(
+                                                text = themeCard.pageTag,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = themeCard.text.copy(alpha = 0.8f),
+                                                maxLines = 1,
+                                                softWrap = false
+                                            )
                                         }
                                     }
                                 }
                             }
 
-                            Text("Tamanho do texto (${fontSize.toInt()} sp)", fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = currentTheme.text)
+                            Text(
+                                text = "Tamanho do texto",
+                                fontFamily = FontFamily.Serif,
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFE3ECE7)
+                            )
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                OutlinedButton(onClick = { fontSize = (fontSize - 1f).coerceIn(13f, 32f) }) {
-                                    Text("A-", maxLines = 1, softWrap = false)
+                                Surface(
+                                    shape = CircleShape,
+                                    color = ReaderDarkPill,
+                                    modifier = Modifier
+                                        .size(44.dp)
+                                        .clickable { fontSize = (fontSize - 1f).coerceIn(13f, 32f) }
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Text("−", fontSize = 20.sp, color = Color(0xFFE3ECE7))
+                                    }
                                 }
-                                Slider(
-                                    value = fontSize,
-                                    onValueChange = { fontSize = it },
-                                    valueRange = 13f..32f,
-                                    modifier = Modifier.weight(1f)
+                                Text(
+                                    text = "Aa",
+                                    fontFamily = FontFamily.Serif,
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color(0xFFE3ECE7)
                                 )
-                                OutlinedButton(onClick = { fontSize = (fontSize + 1f).coerceIn(13f, 32f) }) {
-                                    Text("A+", maxLines = 1, softWrap = false)
+                                Surface(
+                                    shape = CircleShape,
+                                    color = ReaderDarkPill,
+                                    modifier = Modifier
+                                        .size(44.dp)
+                                        .clickable { fontSize = (fontSize + 1f).coerceIn(13f, 32f) }
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Text("+", fontSize = 20.sp, color = Color(0xFFE3ECE7))
+                                    }
                                 }
                             }
 
-                            Text("Tipo de fonte", fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = currentTheme.text)
-                            Row(
-                                modifier = Modifier.horizontalScroll(rememberScrollState()),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            Text(
+                                text = "Fonte",
+                                fontFamily = FontFamily.Serif,
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFE3ECE7)
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(24.dp),
+                                color = ReaderDarkPill,
+                                modifier = Modifier.fillMaxWidth()
                             ) {
-                                ReaderFont.entries.forEach { f ->
-                                    FilterChip(
-                                        selected = currentFont == f,
-                                        onClick = { currentFont = f },
-                                        label = { Text(f.label, maxLines = 1, softWrap = false) }
-                                    )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(4.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    ReaderFont.entries.forEach { fontOpt ->
+                                        val selected = currentFont == fontOpt
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(20.dp))
+                                                .background(if (selected) ReaderTealAccent else Color.Transparent)
+                                                .clickable { currentFont = fontOpt }
+                                                .padding(horizontal = 14.dp, vertical = 9.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = fontOpt.label,
+                                                fontSize = 13.sp,
+                                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                                color = if (selected) Color(0xFF07120E) else Color(0xFFE3ECE7),
+                                                maxLines = 1,
+                                                softWrap = false
+                                            )
+                                        }
+                                    }
                                 }
                             }
+                            Text(
+                                text = "A rápida raposa castanha salta sobre o cão preguiçoso.",
+                                fontFamily = currentFont.family,
+                                fontSize = 16.sp,
+                                color = Color(0xFFE3ECE7).copy(alpha = 0.85f)
+                            )
 
-                            Text("Alinhamento do texto", fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = currentTheme.text)
-                            Row(
-                                modifier = Modifier.horizontalScroll(rememberScrollState()),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            Text(
+                                text = "Espaçamento entre linhas",
+                                fontFamily = FontFamily.Serif,
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFE3ECE7)
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(24.dp),
+                                color = ReaderDarkPill,
+                                modifier = Modifier.fillMaxWidth()
                             ) {
-                                ReaderAlignment.entries.forEach { al ->
-                                    FilterChip(
-                                        selected = currentAlign == al,
-                                        onClick = { currentAlign = al },
-                                        label = { Text(al.label, maxLines = 1, softWrap = false) }
-                                    )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(4.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    listOf(1.38f to "Compacto", 1.62f to "Normal", 1.88f to "Amplo").forEach { (mult, lbl) ->
+                                        val selected = kotlin.math.abs(lineHeightMultiplier - mult) < 0.05f
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(20.dp))
+                                                .background(if (selected) ReaderTealAccent else Color.Transparent)
+                                                .clickable { lineHeightMultiplier = mult }
+                                                .padding(horizontal = 16.dp, vertical = 9.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = lbl,
+                                                fontSize = 13.sp,
+                                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                                color = if (selected) Color(0xFF07120E) else Color(0xFFE3ECE7),
+                                                maxLines = 1,
+                                                softWrap = false
+                                            )
+                                        }
+                                    }
                                 }
                             }
 
-                            Text("Espaçamento entre linhas", fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = currentTheme.text)
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                listOf(1.38f to "Compacto", 1.62f to "Normal", 1.88f to "Confortável").forEach { (mult, lbl) ->
-                                    FilterChip(
-                                        selected = kotlin.math.abs(lineHeightMultiplier - mult) < 0.05f,
-                                        onClick = { lineHeightMultiplier = mult },
-                                        label = { Text(lbl, maxLines = 1, softWrap = false) }
-                                    )
+                            Text(
+                                text = "Margens",
+                                fontFamily = FontFamily.Serif,
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFE3ECE7)
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(24.dp),
+                                color = ReaderDarkPill,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(4.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    listOf(14 to "Estreitas", 20 to "Normais", 30 to "Largas").forEach { (pad, lbl) ->
+                                        val selected = horizontalPaddingDp == pad
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(20.dp))
+                                                .background(if (selected) ReaderTealAccent else Color.Transparent)
+                                                .clickable { horizontalPaddingDp = pad }
+                                                .padding(horizontal = 16.dp, vertical = 9.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = lbl,
+                                                fontSize = 13.sp,
+                                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                                color = if (selected) Color(0xFF07120E) else Color(0xFFE3ECE7),
+                                                maxLines = 1,
+                                                softWrap = false
+                                            )
+                                        }
+                                    }
                                 }
                             }
 
-                            Text("Margens laterais", fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = currentTheme.text)
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                listOf(14 to "Estreita", 22 to "Normal", 32 to "Ampla").forEach { (pad, lbl) ->
-                                    FilterChip(
-                                        selected = horizontalPaddingDp == pad,
-                                        onClick = { horizontalPaddingDp = pad },
-                                        label = { Text(lbl, maxLines = 1, softWrap = false) }
-                                    )
+                            Text(
+                                text = "Parágrafos",
+                                fontFamily = FontFamily.Serif,
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFE3ECE7)
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(24.dp),
+                                color = ReaderDarkPill,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(4.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(20.dp))
+                                            .background(if (paragraphSpaced) ReaderTealAccent else Color.Transparent)
+                                            .clickable { paragraphSpaced = true }
+                                            .padding(vertical = 9.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = "Espaçados",
+                                            fontSize = 13.sp,
+                                            fontWeight = if (paragraphSpaced) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (paragraphSpaced) Color(0xFF07120E) else Color(0xFFE3ECE7),
+                                            maxLines = 1,
+                                            softWrap = false
+                                        )
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(20.dp))
+                                            .background(if (!paragraphSpaced) ReaderTealAccent else Color.Transparent)
+                                            .clickable { paragraphSpaced = false }
+                                            .padding(vertical = 9.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = "Contínuos",
+                                            fontSize = 13.sp,
+                                            fontWeight = if (!paragraphSpaced) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (!paragraphSpaced) Color(0xFF07120E) else Color(0xFFE3ECE7),
+                                            maxLines = 1,
+                                            softWrap = false
+                                        )
+                                    }
                                 }
                             }
 
-                            Spacer(modifier = Modifier.height(20.dp))
+                            Text(
+                                text = "Layout",
+                                fontFamily = FontFamily.Serif,
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFE3ECE7)
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(24.dp),
+                                color = ReaderDarkPill,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(4.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    val isScroll = readingViewMode == ReadingViewMode.SCROLL
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(20.dp))
+                                            .background(if (isScroll) ReaderTealAccent else Color.Transparent)
+                                            .clickable { readingViewMode = ReadingViewMode.SCROLL }
+                                            .padding(vertical = 9.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = "Rolagem",
+                                            fontSize = 13.sp,
+                                            fontWeight = if (isScroll) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (isScroll) Color(0xFF07120E) else Color(0xFFE3ECE7),
+                                            maxLines = 1,
+                                            softWrap = false
+                                        )
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(20.dp))
+                                            .background(if (!isScroll) ReaderTealAccent else Color.Transparent)
+                                            .clickable { readingViewMode = ReadingViewMode.PAGED }
+                                            .padding(vertical = 9.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = "Páginas",
+                                            fontSize = 13.sp,
+                                            fontWeight = if (!isScroll) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (!isScroll) Color(0xFF07120E) else Color(0xFFE3ECE7),
+                                            maxLines = 1,
+                                            softWrap = false
+                                        )
+                                    }
+                                }
+                            }
+
+                            Text(
+                                text = "Rolagem automática",
+                                fontFamily = FontFamily.Serif,
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFE3ECE7)
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    shape = CircleShape,
+                                    color = ReaderDarkPill,
+                                    modifier = Modifier
+                                        .size(44.dp)
+                                        .clickable { autoScrollLinesPerMinute = (autoScrollLinesPerMinute - 4).coerceIn(8, 72) }
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Text("−", fontSize = 20.sp, color = Color(0xFFE3ECE7))
+                                    }
+                                }
+                                Text(
+                                    text = "$autoScrollLinesPerMinute linhas por minuto",
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color(0xFFE3ECE7)
+                                )
+                                Surface(
+                                    shape = CircleShape,
+                                    color = ReaderDarkPill,
+                                    modifier = Modifier
+                                        .size(44.dp)
+                                        .clickable { autoScrollLinesPerMinute = (autoScrollLinesPerMinute + 4).coerceIn(8, 72) }
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Text("+", fontSize = 20.sp, color = Color(0xFFE3ECE7))
+                                    }
+                                }
+                            }
+                            Text(
+                                text = "A página avança sozinha até ao fim do capítulo; um toque pausa momentaneamente.",
+                                fontSize = 13.sp,
+                                color = Color(0xFFE3ECE7).copy(alpha = 0.65f)
+                            )
+                            Button(
+                                colors = ButtonDefaults.buttonColors(containerColor = ReaderTealAccent, contentColor = Color(0xFF07120E)),
+                                onClick = {
+                                    readingViewMode = ReadingViewMode.SCROLL
+                                    autoScrollEnabled = !autoScrollEnabled
+                                    if (autoScrollEnabled) stopAudio()
+                                    showTypeSheet = false
+                                },
+                                shape = RoundedCornerShape(24.dp),
+                                modifier = Modifier.height(46.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (autoScrollEnabled) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                    contentDescription = null
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = if (autoScrollEnabled) "Pausar rolagem automática" else "Iniciar rolagem automática",
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Justificar texto", fontSize = 16.sp, color = Color(0xFFE3ECE7))
+                                    Text("Margem direita alinhada como livro impresso", fontSize = 12.sp, color = Color(0xFFE3ECE7).copy(alpha = 0.65f))
+                                }
+                                Switch(
+                                    checked = justifyText,
+                                    onCheckedChange = { justifyText = it },
+                                    colors = SwitchDefaults.colors(checkedTrackColor = ReaderTealAccent)
+                                )
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Ecrã inteiro", fontSize = 16.sp, color = Color(0xFFE3ECE7))
+                                    Text("Oculta barras do sistema durante a leitura", fontSize = 12.sp, color = Color(0xFFE3ECE7).copy(alpha = 0.65f))
+                                }
+                                Switch(
+                                    checked = isFullscreenMode,
+                                    onCheckedChange = { isFullscreenMode = it },
+                                    colors = SwitchDefaults.colors(checkedTrackColor = ReaderTealAccent)
+                                )
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Manter ecrã ligado", fontSize = 16.sp, color = Color(0xFFE3ECE7))
+                                    Text("Enquanto um livro estiver aberto", fontSize = 12.sp, color = Color(0xFFE3ECE7).copy(alpha = 0.65f))
+                                }
+                                Switch(
+                                    checked = keepScreenOn,
+                                    onCheckedChange = { keepScreenOn = it },
+                                    colors = SwitchDefaults.colors(checkedTrackColor = ReaderTealAccent)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(22.dp))
                         }
                     }
                 }
@@ -1532,8 +2296,8 @@ class MainActivity : ComponentActivity() {
                     val paletteList = ReadingEnhancementManager.presetPaletteColors + customColors
                     AlertDialog(
                         onDismissRequest = { showNoteDialog = false },
-                        containerColor = currentTheme.barBg,
-                        title = { Text("Destacar, Sublinhar ou Anotar", color = currentTheme.text) },
+                        containerColor = ReaderDarkSheet,
+                        title = { Text("Destacar, Sublinhar ou Anotar", color = Color(0xFFE3ECE7)) },
                         text = {
                             Column(
                                 modifier = Modifier.verticalScroll(rememberScrollState()),
@@ -1551,9 +2315,9 @@ class MainActivity : ComponentActivity() {
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text("Paleta de cores:", color = currentTheme.text, fontSize = 13.sp, maxLines = 1, softWrap = false)
+                                    Text("Paleta de cores:", color = Color(0xFFE3ECE7), fontSize = 13.sp, maxLines = 1, softWrap = false)
                                     TextButton(onClick = { showColorMixerDialog = true }) {
-                                        Text("+ Misturar / Criar", color = currentTheme.accent, maxLines = 1, softWrap = false)
+                                        Text("+ Misturar / Criar", color = ReaderTealAccent, maxLines = 1, softWrap = false)
                                     }
                                 }
                                 Row(
@@ -1571,7 +2335,7 @@ class MainActivity : ComponentActivity() {
                                                 .background(paletteItem.toComposeColor())
                                                 .border(
                                                     width = if (isSelected) 3.dp else 1.dp,
-                                                    color = if (isSelected) currentTheme.accent else Color.Gray,
+                                                    color = if (isSelected) ReaderTealAccent else Color.Gray,
                                                     shape = CircleShape
                                                 )
                                                 .clickable { selectedColorKey = paletteItem.id }
@@ -1580,7 +2344,7 @@ class MainActivity : ComponentActivity() {
                                 }
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Checkbox(checked = draftUnderline, onCheckedChange = { draftUnderline = it })
-                                    Text("Sublinhar texto no livro", color = currentTheme.text)
+                                    Text("Sublinhar texto no livro", color = Color(0xFFE3ECE7))
                                 }
                                 OutlinedTextField(
                                     value = draftNote,
@@ -1599,30 +2363,30 @@ class MainActivity : ComponentActivity() {
                                             showStudyBanner = false
                                             startAudio(draftSelection)
                                         }) {
-                                            Icon(Icons.Rounded.VolumeUp, contentDescription = null, tint = currentTheme.accent)
+                                            Icon(Icons.Rounded.VolumeUp, contentDescription = null, tint = ReaderTealAccent)
                                             Spacer(modifier = Modifier.width(4.dp))
-                                            Text("Ouvir", color = currentTheme.text, maxLines = 1, softWrap = false)
+                                            Text("Ouvir", color = Color(0xFFE3ECE7), maxLines = 1, softWrap = false)
                                         }
                                     }
                                     OutlinedButton(onClick = { openDictionaryOrTranslate(draftSelection) }) {
-                                        Icon(Icons.Rounded.Translate, contentDescription = null, tint = currentTheme.accent)
+                                        Icon(Icons.Rounded.Translate, contentDescription = null, tint = ReaderTealAccent)
                                         Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Dicionário / Tradutor", color = currentTheme.text, maxLines = 1, softWrap = false)
+                                        Text("Dicionário / Tradutor", color = Color(0xFFE3ECE7), maxLines = 1, softWrap = false)
                                     }
                                     OutlinedButton(onClick = {
                                         researchQueryInput = draftSelection
                                         showResearchHubDialog = true
                                     }) {
-                                        Icon(Icons.Rounded.Search, contentDescription = null, tint = currentTheme.accent)
+                                        Icon(Icons.Rounded.Search, contentDescription = null, tint = ReaderTealAccent)
                                         Spacer(modifier = Modifier.width(4.dp))
-                                        Text("IA / Google", color = currentTheme.text, maxLines = 1, softWrap = false)
+                                        Text("IA / Google", color = Color(0xFFE3ECE7), maxLines = 1, softWrap = false)
                                     }
                                 }
                             }
                         },
                         confirmButton = {
                             Button(
-                                colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color.White),
+                                colors = ButtonDefaults.buttonColors(containerColor = ReaderTealAccent, contentColor = Color(0xFF07120E)),
                                 onClick = {
                                     if (draftSelection.isNotBlank() || draftNote.isNotBlank()) {
                                         val item = StudyAnnotation(
@@ -1640,11 +2404,11 @@ class MainActivity : ComponentActivity() {
                                     showNoteDialog = false
                                     showStudyBanner = false
                                 }
-                            ) { Text("Guardar", maxLines = 1, softWrap = false) }
+                            ) { Text("Guardar", fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false) }
                         },
                         dismissButton = {
                             TextButton(onClick = { showNoteDialog = false }) {
-                                Text("Cancelar", color = currentTheme.text, maxLines = 1, softWrap = false)
+                                Text("Cancelar", color = Color(0xFFE3ECE7), maxLines = 1, softWrap = false)
                             }
                         }
                     )
@@ -1653,14 +2417,15 @@ class MainActivity : ComponentActivity() {
                 if (showTocSheet) {
                     ModalBottomSheet(
                         onDismissRequest = { showTocSheet = false },
-                        containerColor = currentTheme.barBg
+                        containerColor = ReaderDarkSheet
                     ) {
                         Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
                             Text(
                                 text = "Índice — ${currentBook.title}",
+                                fontFamily = FontFamily.Serif,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 18.sp,
-                                color = currentTheme.text
+                                color = Color(0xFFE3ECE7)
                             )
                             Spacer(modifier = Modifier.height(12.dp))
                             LazyColumn(modifier = Modifier.heightIn(max = 400.dp)) {
@@ -1670,7 +2435,7 @@ class MainActivity : ComponentActivity() {
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .clip(RoundedCornerShape(12.dp))
-                                            .background(if (isSelected) currentTheme.accent.copy(alpha = 0.22f) else Color.Transparent)
+                                            .background(if (isSelected) ReaderTealAccent.copy(alpha = 0.22f) else Color.Transparent)
                                             .clickable {
                                                 stopAudio()
                                                 currentChapterIndex = index
@@ -1682,7 +2447,7 @@ class MainActivity : ComponentActivity() {
                                     ) {
                                         Text(
                                             text = chapter.title,
-                                            color = if (isSelected) currentTheme.accent else currentTheme.text,
+                                            color = if (isSelected) ReaderTealAccent else Color(0xFFE3ECE7),
                                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                                             fontSize = 15.sp
                                         )
@@ -1701,10 +2466,10 @@ class MainActivity : ComponentActivity() {
                     textContent
                 }
 
-                val effectiveAlign = if (currentAlign == ReaderAlignment.JUSTIFY && displayedText.length < 180) {
-                    TextAlign.Start
+                val effectiveAlign = if (justifyText && displayedText.length >= 180) {
+                    TextAlign.Justify
                 } else {
-                    currentAlign.align
+                    TextAlign.Start
                 }
 
                 val customTextToolbar = remember(
@@ -1751,145 +2516,107 @@ class MainActivity : ComponentActivity() {
                                         Modifier
                                     }
                                 )
-                                .padding(top = 16.dp, bottom = 150.dp)
+                                .padding(top = 14.dp, bottom = 148.dp)
                         ) {
                             if (showTopAndBottomBars) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    IconButton(
-                                        onClick = { closeReaderBackToLibrary() },
-                                        modifier = Modifier.size(38.dp)
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = ReaderDarkPill,
+                                        modifier = Modifier
+                                            .size(40.dp)
+                                            .clickable { closeReaderBackToLibrary() }
                                     ) {
-                                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Voltar", tint = currentTheme.text)
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.ArrowBack,
+                                                contentDescription = "Voltar",
+                                                tint = currentTheme.text,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
                                     }
+
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
                                             text = currentBook.title,
                                             fontFamily = FontFamily.Serif,
-                                            fontSize = 15.sp,
+                                            fontSize = 18.sp,
                                             fontWeight = FontWeight.Bold,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
                                             color = currentTheme.text
                                         )
-                                        val reflowTag = if (activeReflowMode == ReflowMode.AUTO_ADAPT) "Reflow" else "Original"
-                                        val subLabel = if (readingViewMode == ReadingViewMode.PAGED) {
-                                            "${activeChapter.title} • ${currentPageIndex + 1}/${pages.size} • $reflowTag"
-                                        } else {
-                                            "${activeChapter.title} • $reflowTag"
-                                        }
+                                        val chapterPosText = "${currentChapterIndex + 1}/${currentBook.chapters.size.coerceAtLeast(1)}"
                                         Text(
-                                            text = subLabel,
+                                            text = "${activeChapter.title.uppercase()} • $chapterPosText",
                                             fontSize = 11.sp,
+                                            letterSpacing = 0.5.sp,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
                                             color = currentTheme.text.copy(alpha = 0.65f)
                                         )
                                     }
-                                    Row(
-                                        modifier = Modifier
-                                            .widthIn(max = 152.dp)
-                                            .horizontalScroll(rememberScrollState()),
-                                        horizontalArrangement = Arrangement.spacedBy(2.dp)
-                                    ) {
-                                        IconButton(
-                                            onClick = { showTypeSheet = true },
-                                            modifier = Modifier.size(36.dp)
-                                        ) {
-                                            Icon(Icons.Rounded.FormatSize, contentDescription = "Aparência e fontes", tint = currentTheme.accent)
-                                        }
-                                        IconButton(
-                                            onClick = {
-                                                val clipNow = clipboard.getText()?.text ?: ""
-                                                if (clipNow.isNotBlank() && draftSelection.isBlank()) {
-                                                    draftSelection = clipNow
+
+                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = ReaderDarkPill,
+                                            modifier = Modifier
+                                                .size(38.dp)
+                                                .clickable {
+                                                    researchQueryInput = draftSelection
+                                                    showResearchHubDialog = true
                                                 }
-                                                showNoteDialog = true
-                                            },
-                                            modifier = Modifier.size(36.dp)
                                         ) {
-                                            Icon(Icons.Rounded.EditNote, contentDescription = "Nota e destaque", tint = currentTheme.text)
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.Search,
+                                                    contentDescription = "Pesquisar",
+                                                    tint = currentTheme.text,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
                                         }
-                                        IconButton(
-                                            onClick = { showTocSheet = true },
-                                            modifier = Modifier.size(36.dp)
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = ReaderDarkPill,
+                                            modifier = Modifier
+                                                .size(38.dp)
+                                                .clickable { showTocSheet = true }
                                         ) {
-                                            Icon(Icons.Rounded.FormatListBulleted, contentDescription = "Índice", tint = currentTheme.text)
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.BookmarkBorder,
+                                                    contentDescription = "Índice e marcadores",
+                                                    tint = currentTheme.text,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
                                         }
-                                        IconButton(
-                                            onClick = { showNotebookSheet = true },
-                                            modifier = Modifier.size(36.dp)
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = ReaderDarkPill,
+                                            modifier = Modifier
+                                                .size(38.dp)
+                                                .clickable { showTypeSheet = true }
                                         ) {
-                                            Icon(Icons.Rounded.Book, contentDescription = "Notas do livro", tint = currentTheme.text)
-                                        }
-                                        IconButton(
-                                            onClick = {
-                                                activeReflowMode = if (activeReflowMode == ReflowMode.AUTO_ADAPT) {
-                                                    ReflowMode.ORIGINAL_LAYOUT
-                                                } else {
-                                                    ReflowMode.AUTO_ADAPT
-                                                }
-                                            },
-                                            modifier = Modifier.size(36.dp)
-                                        ) {
-                                            Icon(Icons.Rounded.WrapText, contentDescription = "Reflow", tint = currentTheme.text)
-                                        }
-                                        IconButton(
-                                            onClick = { showTranslateSheet = true },
-                                            modifier = Modifier.size(36.dp)
-                                        ) {
-                                            Icon(Icons.Rounded.Translate, contentDescription = "Traduzir", tint = currentTheme.text)
-                                        }
-                                        IconButton(
-                                            onClick = {
-                                                researchQueryInput = draftSelection
-                                                showResearchHubDialog = true
-                                            },
-                                            modifier = Modifier.size(36.dp)
-                                        ) {
-                                            Icon(Icons.Rounded.TravelExplore, contentDescription = "Pesquisa e IA", tint = currentTheme.text)
-                                        }
-                                        IconButton(
-                                            onClick = { showSavedAudioSheet = true },
-                                            modifier = Modifier.size(36.dp)
-                                        ) {
-                                            Icon(Icons.Rounded.AudioFile, contentDescription = "Áudios guardados", tint = currentTheme.text)
-                                        }
-                                        IconButton(
-                                            onClick = {
-                                                readingViewMode = if (readingViewMode == ReadingViewMode.SCROLL) {
-                                                    ReadingViewMode.PAGED
-                                                } else {
-                                                    ReadingViewMode.SCROLL
-                                                }
-                                            },
-                                            modifier = Modifier.size(36.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = if (readingViewMode == ReadingViewMode.PAGED) Icons.Rounded.ViewStream else Icons.Rounded.AutoStories,
-                                                contentDescription = "Rolagem ou páginas",
-                                                tint = currentTheme.text
-                                            )
-                                        }
-                                        IconButton(
-                                            onClick = { isFullscreenMode = !isFullscreenMode },
-                                            modifier = Modifier.size(36.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = if (isFullscreenMode) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
-                                                contentDescription = "Ecrã inteiro",
-                                                tint = currentTheme.text
-                                            )
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Text(
+                                                    text = "Tt",
+                                                    fontSize = 13.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = currentTheme.text
+                                                )
+                                            }
                                         }
                                     }
                                 }
-                                HorizontalDivider(
-                                    color = currentTheme.text.copy(alpha = 0.1f),
-                                    modifier = Modifier.padding(top = 8.dp, bottom = 14.dp)
-                                )
+                                Spacer(modifier = Modifier.height(14.dp))
                             }
 
                             val bookAnnotations = annotations.filter {
@@ -1920,7 +2647,7 @@ class MainActivity : ComponentActivity() {
                                         if (range.first >= 0 && range.last < displayedText.length) {
                                             addStyle(
                                                 SpanStyle(
-                                                    background = currentTheme.highlightBg.copy(alpha = 0.65f),
+                                                    background = currentTheme.highlightBg.copy(alpha = 0.72f),
                                                     color = currentTheme.highlightText
                                                 ),
                                                 range.first,
@@ -1934,7 +2661,7 @@ class MainActivity : ComponentActivity() {
                                                 addStyle(
                                                     SpanStyle(
                                                         background = currentTheme.accent,
-                                                        color = Color.White,
+                                                        color = Color(0xFF07120E),
                                                         fontWeight = FontWeight.Bold,
                                                         textDecoration = TextDecoration.Underline
                                                     ),
@@ -1988,7 +2715,7 @@ class MainActivity : ComponentActivity() {
                                         softWrap = false
                                     )
                                     Button(
-                                        colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color.White),
+                                        colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color(0xFF07120E)),
                                         onClick = {
                                             if (currentPageIndex < pages.lastIndex) {
                                                 currentPageIndex++
@@ -1999,10 +2726,18 @@ class MainActivity : ComponentActivity() {
                                         },
                                         enabled = currentPageIndex < pages.lastIndex
                                     ) {
-                                        Text("Seguinte", maxLines = 1, softWrap = false)
+                                        Text("Seguinte", fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
                                     }
                                 }
                             }
+                        }
+
+                        if (warmthPercent > 0) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color(0xFFFFB347).copy(alpha = (warmthPercent / 100f) * 0.24f))
+                            )
                         }
 
                         if (showStudyBanner) {
@@ -2010,9 +2745,9 @@ class MainActivity : ComponentActivity() {
                             Surface(
                                 modifier = Modifier
                                     .align(Alignment.TopCenter)
-                                    .padding(top = 72.dp, start = 12.dp, end = 12.dp),
+                                    .padding(top = 68.dp, start = 12.dp, end = 12.dp),
                                 shape = RoundedCornerShape(24.dp),
-                                color = currentTheme.barBg,
+                                color = ReaderDarkSheet,
                                 shadowElevation = 10.dp
                             ) {
                                 Row(
@@ -2059,7 +2794,7 @@ class MainActivity : ComponentActivity() {
                                         },
                                         contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
                                     ) {
-                                        Text("Sublinhar", color = currentTheme.text, fontSize = 12.sp, maxLines = 1, softWrap = false)
+                                        Text("Sublinhar", color = Color(0xFFE3ECE7), fontSize = 12.sp, maxLines = 1, softWrap = false)
                                     }
                                     IconButton(
                                         onClick = {
@@ -2068,13 +2803,13 @@ class MainActivity : ComponentActivity() {
                                         },
                                         modifier = Modifier.size(32.dp)
                                     ) {
-                                        Icon(Icons.Rounded.VolumeUp, contentDescription = "Ouvir trecho", tint = currentTheme.accent)
+                                        Icon(Icons.Rounded.VolumeUp, contentDescription = "Ouvir trecho", tint = ReaderTealAccent)
                                     }
                                     IconButton(onClick = { showNoteDialog = true }, modifier = Modifier.size(32.dp)) {
-                                        Icon(Icons.Rounded.EditNote, contentDescription = "Nota/Sublinhar/Cores", tint = currentTheme.text)
+                                        Icon(Icons.Rounded.EditNote, contentDescription = "Nota/Sublinhar/Cores", tint = Color(0xFFE3ECE7))
                                     }
                                     IconButton(onClick = { openDictionaryOrTranslate(draftSelection) }, modifier = Modifier.size(32.dp)) {
-                                        Icon(Icons.Rounded.Translate, contentDescription = "Dicionário / Tradutor", tint = currentTheme.text)
+                                        Icon(Icons.Rounded.Translate, contentDescription = "Dicionário / Tradutor", tint = Color(0xFFE3ECE7))
                                     }
                                     IconButton(
                                         onClick = {
@@ -2084,10 +2819,10 @@ class MainActivity : ComponentActivity() {
                                         },
                                         modifier = Modifier.size(32.dp)
                                     ) {
-                                        Icon(Icons.Rounded.TravelExplore, contentDescription = "IA / Google", tint = currentTheme.text)
+                                        Icon(Icons.Rounded.TravelExplore, contentDescription = "IA / Google", tint = Color(0xFFE3ECE7))
                                     }
                                     IconButton(onClick = { showStudyBanner = false }, modifier = Modifier.size(28.dp)) {
-                                        Icon(Icons.Rounded.Close, contentDescription = "Fechar", tint = currentTheme.text.copy(alpha = 0.6f))
+                                        Icon(Icons.Rounded.Close, contentDescription = "Fechar", tint = Color(0xFFE3ECE7).copy(alpha = 0.6f))
                                     }
                                 }
                             }
@@ -2097,32 +2832,37 @@ class MainActivity : ComponentActivity() {
                             Surface(
                                 modifier = Modifier
                                     .align(Alignment.BottomCenter)
-                                    .padding(horizontal = 16.dp, vertical = 14.dp)
+                                    .padding(horizontal = 14.dp, vertical = 12.dp)
                                     .fillMaxWidth()
-                                    .border(1.dp, currentTheme.text.copy(alpha = 0.1f), RoundedCornerShape(28.dp)),
-                                shape = RoundedCornerShape(28.dp),
-                                color = currentTheme.barBg,
-                                shadowElevation = 8.dp
+                                    .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(30.dp)),
+                                shape = RoundedCornerShape(30.dp),
+                                color = ReaderDarkSheet,
+                                shadowElevation = 10.dp
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 10.dp, vertical = 8.dp),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    TextButton(onClick = {
-                                        speechRate = when (speechRate) {
-                                            1.0f -> 1.25f
-                                            1.25f -> 1.5f
-                                            1.5f -> 2.0f
-                                            else -> 1.0f
-                                        }
-                                        if (isPlaying) {
-                                            stopAudio()
-                                            startAudio(textContent)
-                                        }
-                                    }) {
-                                        Text("${speechRate}x", fontWeight = FontWeight.Bold, color = currentTheme.accent, maxLines = 1, softWrap = false)
+                                    TextButton(
+                                        onClick = {
+                                            listenSheetTab = 0
+                                            showListenSheet = true
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                                    ) {
+                                        Text(
+                                            text = "${speechRate}×",
+                                            fontSize = 15.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFFE3ECE7),
+                                            maxLines = 1,
+                                            softWrap = false
+                                        )
                                     }
+
                                     IconButton(
                                         onClick = {
                                             if (currentChapterIndex > 0) {
@@ -2134,22 +2874,28 @@ class MainActivity : ComponentActivity() {
                                         },
                                         enabled = currentChapterIndex > 0
                                     ) {
-                                        Icon(Icons.Rounded.SkipPrevious, contentDescription = "Anterior", tint = currentTheme.text)
+                                        Icon(Icons.Rounded.SkipPrevious, contentDescription = "Capítulo anterior", tint = Color(0xFFE3ECE7))
                                     }
-                                    IconButton(
-                                        onClick = { if (isPlaying) stopAudio() else startAudio(textContent) },
+
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = ReaderTealAccent,
                                         modifier = Modifier
-                                            .size(50.dp)
-                                            .clip(CircleShape)
-                                            .background(currentTheme.accent)
+                                            .size(52.dp)
+                                            .clickable {
+                                                if (isPlaying) stopAudio() else startAudio(textContent)
+                                            }
                                     ) {
-                                        Icon(
-                                            imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                                            contentDescription = "Play/Pause",
-                                            tint = Color.White,
-                                            modifier = Modifier.size(26.dp)
-                                        )
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                                contentDescription = if (isPlaying) "Pausar" else "Reproduzir",
+                                                tint = Color(0xFF07120E),
+                                                modifier = Modifier.size(28.dp)
+                                            )
+                                        }
                                     }
+
                                     IconButton(
                                         onClick = {
                                             if (currentChapterIndex < currentBook.chapters.size - 1) {
@@ -2161,10 +2907,16 @@ class MainActivity : ComponentActivity() {
                                         },
                                         enabled = currentChapterIndex < currentBook.chapters.size - 1
                                     ) {
-                                        Icon(Icons.Rounded.SkipNext, contentDescription = "Seguinte", tint = currentTheme.text)
+                                        Icon(Icons.Rounded.SkipNext, contentDescription = "Capítulo seguinte", tint = Color(0xFFE3ECE7))
                                     }
-                                    IconButton(onClick = { stopAudio() }) {
-                                        Icon(Icons.Rounded.Stop, contentDescription = "Parar", tint = currentTheme.text)
+
+                                    IconButton(
+                                        onClick = {
+                                            listenSheetTab = 0
+                                            showListenSheet = true
+                                        }
+                                    ) {
+                                        Icon(Icons.Rounded.MoreHoriz, contentDescription = "Mais opções de voz e leitura", tint = Color(0xFFE3ECE7))
                                     }
                                 }
                             }
@@ -2391,13 +3143,13 @@ class MainActivity : ComponentActivity() {
                                                             .clip(CircleShape)
                                                     )
                                                     Button(
-                                                        colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color.White),
+                                                        colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color(0xFF07120E)),
                                                         onClick = { openBookMeta(recentMeta) },
                                                         modifier = Modifier.fillMaxWidth()
                                                     ) {
                                                         Icon(Icons.Rounded.PlayArrow, contentDescription = null)
                                                         Spacer(modifier = Modifier.width(6.dp))
-                                                        Text("Continuar a ler", maxLines = 1, softWrap = false)
+                                                        Text("Continuar a ler", fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
                                                     }
                                                 } else {
                                                     Text(
@@ -2406,14 +3158,14 @@ class MainActivity : ComponentActivity() {
                                                         color = currentTheme.text.copy(alpha = 0.8f)
                                                     )
                                                     Button(
-                                                        colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color.White),
+                                                        colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color(0xFF07120E)),
                                                         onClick = {
                                                             filePicker.launch(arrayOf("application/epub+zip", "application/pdf", "text/plain"))
                                                         }
                                                     ) {
                                                         Icon(Icons.Rounded.Add, contentDescription = null)
                                                         Spacer(modifier = Modifier.width(6.dp))
-                                                        Text("Importar primeiro livro", maxLines = 1, softWrap = false)
+                                                        Text("Importar primeiro livro", fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
                                                     }
                                                 }
                                             }
@@ -2530,10 +3282,10 @@ class MainActivity : ComponentActivity() {
                                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                                 ) {
                                                     Button(
-                                                        colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color.White),
+                                                        colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color(0xFF07120E)),
                                                         onClick = { openDictionaryOrTranslate(lookupQueryInput) }
                                                     ) {
-                                                        Text("Dicionário", maxLines = 1, softWrap = false)
+                                                        Text("Dicionário", fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
                                                     }
                                                     OutlinedButton(onClick = {
                                                         openResearchTarget(ResearchToolTarget.TRANSLATE, lookupQueryInput)
@@ -2665,7 +3417,7 @@ class MainActivity : ComponentActivity() {
                                                             color = Color.Black.copy(alpha = 0.65f)
                                                         ) {
                                                             Text(
-                                                                text = if (progressPct >= 100) "DONE" else "$progressPct%",
+                                                                text = if (progressPct >= 100) "CONCLUÍDO" else "$progressPct%",
                                                                 color = Color.White,
                                                                 fontSize = 11.sp,
                                                                 fontWeight = FontWeight.Bold,
@@ -2901,7 +3653,7 @@ class MainActivity : ComponentActivity() {
                                                         Text("URL", fontSize = 12.sp, maxLines = 1, softWrap = false)
                                                     }
                                                     Button(
-                                                        colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color.White),
+                                                        colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color(0xFF07120E)),
                                                         onClick = {
                                                             filePicker.launch(arrayOf("application/epub+zip", "application/pdf", "text/plain"))
                                                         },
@@ -2909,7 +3661,7 @@ class MainActivity : ComponentActivity() {
                                                     ) {
                                                         Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(16.dp))
                                                         Spacer(modifier = Modifier.width(4.dp))
-                                                        Text("Ficheiro", fontSize = 12.sp, maxLines = 1, softWrap = false)
+                                                        Text("Ficheiro", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
                                                     }
                                                 }
                                             }
@@ -3135,10 +3887,10 @@ class MainActivity : ComponentActivity() {
                                                     verticalAlignment = Alignment.CenterVertically
                                                 ) {
                                                     Button(
-                                                        colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color.White),
+                                                        colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color(0xFF07120E)),
                                                         onClick = { openDictionaryOrTranslate(lookupQueryInput) }
                                                     ) {
-                                                        Text("Consultar", maxLines = 1, softWrap = false)
+                                                        Text("Consultar", fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
                                                     }
                                                     OutlinedButton(onClick = {
                                                         openResearchTarget(ResearchToolTarget.GOOGLE_SEARCH, lookupQueryInput)
@@ -3647,7 +4399,7 @@ class MainActivity : ComponentActivity() {
                                                             )
                                                         }
                                                         Button(
-                                                            colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color.White),
+                                                            colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color(0xFF07120E)),
                                                             onClick = {
                                                                 downloadingItemId = item.id
                                                                 downloadingPercent = 1
@@ -3683,6 +4435,7 @@ class MainActivity : ComponentActivity() {
                                                         ) {
                                                             Text(
                                                                 text = if (isThisDownloading) "$downloadingPercent%" else "Baixar",
+                                                                fontWeight = FontWeight.SemiBold,
                                                                 maxLines = 1,
                                                                 softWrap = false
                                                             )
