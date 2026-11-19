@@ -16,6 +16,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
@@ -31,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -46,9 +51,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
 import java.util.Locale
 
 enum class ReaderTheme(
@@ -61,7 +67,15 @@ enum class ReaderTheme(
 ) {
     LIGHT("Claro", Color(0xFFFAFAFA), Color(0xFF1E1E1E), Color(0xFFFFE082), Color(0xFF000000), Color(0xFFFFFFFF)),
     SEPIA("Sépia", Color(0xFFF4ECD8), Color(0xFF3E3224), Color(0xFFE6C27A), Color(0xFF1F1810), Color(0xFFEBE0C5)),
-    DARK("Escuro", Color(0xFF121212), Color(0xFFE0E0E0), Color(0xFF3B4CCA), Color(0xFFFFFFFF), Color(0xFF1E1E1E))
+    DARK("Escuro", Color(0xFF121212), Color(0xFFE0E0E0), Color(0xFF3B4CCA), Color(0xFFFFFFFF), Color(0xFF1E1E1E)),
+    FOREST("Theme Verde", Color(0xFF0E1D17), Color(0xFFE6EFEA), Color(0xFF2D6A56), Color(0xFFFFFFFF), Color(0xFF162B23)),
+    PAPYRUS("Papyrus", Color(0xFFF3E6C8), Color(0xFF2C2318), Color(0xFFD9B670), Color(0xFF1A140C), Color(0xFFE8D8B5))
+}
+
+enum class LibraryLayoutMode(val label: String) {
+    GRID("Grelha"),
+    LIST("Lista"),
+    COMPACT("Compacto")
 }
 
 class MainActivity : ComponentActivity() {
@@ -83,6 +97,9 @@ class MainActivity : ComponentActivity() {
             var fontSize by remember { mutableFloatStateOf(19f) }
             var currentFont by remember { mutableStateOf(ReaderFont.SERIF) }
             var currentAlign by remember { mutableStateOf(ReaderAlignment.JUSTIFY) }
+
+            var libraryLayoutMode by remember { mutableStateOf(LibraryLayoutMode.GRID) }
+            var libraryVersion by remember { mutableIntStateOf(0) }
 
             var readingViewMode by remember { mutableStateOf(ReadingViewMode.SCROLL) }
             var barsBehaviorMode by remember { mutableStateOf(BarsBehaviorMode.ALWAYS_VISIBLE) }
@@ -188,6 +205,15 @@ class MainActivity : ComponentActivity() {
                 savedBooks = loaded
                 orgMetaMap = LibraryOrganizationManager.ensureBooksRegistered(context, loaded)
                 categories = LibraryOrganizationManager.loadAllCategories(context)
+                libraryVersion++
+            }
+
+            fun providerForCatalogItem(item: DownloadableVoiceCatalogItem): VoiceProviderType {
+                return when (item.engineLabel.lowercase(Locale.ROOT)) {
+                    "kokoro tts" -> VoiceProviderType.KOKORO_LOCAL
+                    "pocket tts" -> VoiceProviderType.POCKET_TTS_LOCAL
+                    else -> VoiceProviderType.PIPER_LOCAL
+                }
             }
 
             LaunchedEffect(Unit) {
@@ -291,6 +317,7 @@ class MainActivity : ComponentActivity() {
                 if (LibraryOrganizationManager.isSecretUnlocked(context)) {
                     if (bookToToggle != null) {
                         orgMetaMap = LibraryOrganizationManager.toggleBookSecret(context, bookToToggle.id)
+                        libraryVersion++
                     } else {
                         showSecretShelf = !showSecretShelf
                     }
@@ -307,7 +334,9 @@ class MainActivity : ComponentActivity() {
                 webImportStatus = "A descarregar e processar página..."
                 isImporting = true
                 scope.launch {
-                    val result = WebImporter.importFromUrl(rawUrl)
+                    val result = withContext(Dispatchers.IO) {
+                        WebImporter.importFromUrl(rawUrl)
+                    }
                     if (result.success && result.book != null && result.book.chapters.isNotEmpty()) {
                         withContext(Dispatchers.IO) {
                             LibraryManager.saveBookToLibrary(context, result.book, "WEB")
@@ -317,12 +346,48 @@ class MainActivity : ComponentActivity() {
                         webImportError = null
                         webUrlInput = ""
                         showWebImportDialog = false
+                        isImporting = false
                         currentTab = 1
                     } else {
                         webImportStatus = null
                         webImportError = result.errorMessage ?: "Não foi possível importar a página."
+                        isImporting = false
                     }
-                    isImporting = false
+                }
+            }
+
+            val zipPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+                uri?.let { pickedUri ->
+                    voiceDownloadStatus = "A copiar e extrair .zip..."
+                    scope.launch {
+                        val copiedZipFile = withContext(Dispatchers.IO) {
+                            runCatching {
+                                val cacheDir = File(context.cacheDir, "zip_imports").apply { if (!exists()) mkdirs() }
+                                val dest = File(cacheDir, "picked_${System.currentTimeMillis()}.zip")
+                                context.contentResolver.openInputStream(pickedUri)?.use { input ->
+                                    FileOutputStream(dest).use { output -> input.copyTo(output) }
+                                }
+                                if (dest.exists() && dest.length() > 16L) dest else null
+                            }.getOrNull()
+                        }
+                        if (copiedZipFile == null) {
+                            voiceDownloadStatus = "Não foi possível ler o ficheiro .zip selecionado."
+                            return@launch
+                        }
+                        voiceZipSourceInput = copiedZipFile.absolutePath
+                        val res = voiceEngine.downloadAndExtractVoiceZip(
+                            zipUrlOrLocalPath = copiedZipFile.absolutePath,
+                            voiceName = "clone_${System.currentTimeMillis()}"
+                        )
+                        catalogRefreshTick++
+                        voiceDownloadStatus = if (res.isSuccess) {
+                            selectedProvider = VoiceProviderType.POCKET_TTS_LOCAL
+                            syncVoiceEngineConfig()
+                            "Pacote .zip extraído (${voiceEngine.activeClonedVoiceName})"
+                        } else {
+                            "Erro .zip: ${res.exceptionOrNull()?.message}"
+                        }
+                    }
                 }
             }
 
@@ -345,9 +410,11 @@ class MainActivity : ComponentActivity() {
                                 LibraryManager.saveBookToLibrary(context, parsedBook, format)
                             }
                             refreshLibraryAndOrg()
+                            isImporting = false
                             currentTab = 1
+                        } else {
+                            isImporting = false
                         }
-                        isImporting = false
                     }
                 }
             }
@@ -923,6 +990,7 @@ class MainActivity : ComponentActivity() {
                 var draftSelection by remember { mutableStateOf("") }
                 var draftNote by remember { mutableStateOf("") }
                 var draftUnderline by remember { mutableStateOf(false) }
+                var showStudyBanner by remember { mutableStateOf(false) }
 
                 DisposableEffect(currentChapterIndex) {
                     onDispose {
@@ -934,7 +1002,7 @@ class MainActivity : ComponentActivity() {
                 val highlightAnchor = activeWordRange?.first ?: activeSentenceRange?.first
                 LaunchedEffect(highlightAnchor) {
                     val pos = highlightAnchor
-                    if (pos != null && textContent.isNotEmpty()) {
+                    if (pos != null && textContent.isNotEmpty() && isPlaying) {
                         if (readingViewMode == ReadingViewMode.SCROLL && scrollState.maxValue > 0) {
                             val ratio = (pos.toFloat() / textContent.length.toFloat()).coerceIn(0f, 1f)
                             val targetScroll = (ratio * scrollState.maxValue).toInt()
@@ -944,20 +1012,6 @@ class MainActivity : ComponentActivity() {
                                 .toInt()
                                 .coerceIn(0, pages.lastIndex)
                             currentPageIndex = pageIdx
-                        }
-                    }
-                }
-
-                var lastClipboardText by remember { mutableStateOf(clipboard.getText()?.text ?: "") }
-                var showStudyBanner by remember { mutableStateOf(false) }
-                LaunchedEffect(Unit) {
-                    while (true) {
-                        delay(650)
-                        val clipNow = clipboard.getText()?.text ?: ""
-                        if (clipNow.isNotBlank() && clipNow != lastClipboardText) {
-                            lastClipboardText = clipNow
-                            draftSelection = clipNow
-                            showStudyBanner = true
                         }
                     }
                 }
@@ -1388,8 +1442,7 @@ class MainActivity : ComponentActivity() {
                     currentBook.title,
                     currentChapterIndex,
                     activeChapter.title,
-                    selectedColorKey,
-                    annotations
+                    selectedColorKey
                 ) {
                     object : TextToolbar {
                         override var status: TextToolbarStatus = TextToolbarStatus.Hidden
@@ -1406,7 +1459,6 @@ class MainActivity : ComponentActivity() {
                             val clipNow = clipboard.getText()?.text ?: ""
                             if (clipNow.isNotBlank()) {
                                 draftSelection = clipNow
-                                lastClipboardText = clipNow
                                 showStudyBanner = true
                             }
                         }
@@ -1422,11 +1474,6 @@ class MainActivity : ComponentActivity() {
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .clickable {
-                                    if (barsBehaviorMode != BarsBehaviorMode.ALWAYS_VISIBLE) {
-                                        barsVisible = !barsVisible
-                                    }
-                                }
                                 .padding(horizontal = 22.dp)
                                 .then(
                                     if (readingViewMode == ReadingViewMode.SCROLL) {
@@ -1891,7 +1938,10 @@ class MainActivity : ComponentActivity() {
                             )
                             NavigationBarItem(
                                 selected = currentTab == 1,
-                                onClick = { currentTab = 1 },
+                                onClick = {
+                                    refreshLibraryAndOrg()
+                                    currentTab = 1
+                                },
                                 icon = { Icon(Icons.Rounded.LocalLibrary, contentDescription = null) },
                                 label = { Text("Biblioteca", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) }
                             )
@@ -1928,7 +1978,10 @@ class MainActivity : ComponentActivity() {
                                         filePicker.launch(arrayOf("application/epub+zip", "application/pdf", "text/plain"))
                                     }
                                 },
-                                onOpenLibrary = { currentTab = 1 },
+                                onOpenLibrary = {
+                                    refreshLibraryAndOrg()
+                                    currentTab = 1
+                                },
                                 onOpenNotebook = { currentTab = 2 },
                                 onOpenSettings = { currentTab = 3 },
                                 onImportBook = {
@@ -1942,25 +1995,233 @@ class MainActivity : ComponentActivity() {
                                         CircularProgressIndicator(color = Color(0xFF4F46E5))
                                     }
                                 } else {
-                                    val visibleBooks = LibraryOrganizationManager.filterAndSortBooks(
-                                        context = context,
-                                        books = savedBooks,
-                                        selectedCategory = selectedCategory,
-                                        showSecretShelf = showSecretShelf,
-                                        searchQuery = librarySearchQuery,
-                                        formatFilter = formatFilter,
-                                        sortOption = sortOption
-                                    )
-                                    val duplicateCount = LibraryOrganizationManager.findDuplicateGroups(savedBooks).size
-
-                                    LazyColumn(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .background(currentTheme.bg)
-                                            .padding(16.dp),
-                                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                                    val visibleBooks = remember(
+                                        savedBooks,
+                                        selectedCategory,
+                                        showSecretShelf,
+                                        librarySearchQuery,
+                                        formatFilter,
+                                        sortOption,
+                                        libraryVersion
                                     ) {
-                                        item {
+                                        LibraryOrganizationManager.filterAndSortBooks(
+                                            context = context,
+                                            books = savedBooks,
+                                            selectedCategory = selectedCategory,
+                                            showSecretShelf = showSecretShelf,
+                                            searchQuery = librarySearchQuery,
+                                            formatFilter = formatFilter,
+                                            sortOption = sortOption
+                                        )
+                                    }
+                                    val duplicateCount = remember(savedBooks, libraryVersion) {
+                                        LibraryOrganizationManager.findDuplicateGroups(savedBooks).size
+                                    }
+
+                                    @Composable
+                                    fun BookCardContent(book: SavedBookMeta, compact: Boolean) {
+                                        val metaOrg = orgMetaMap[book.id]
+                                        val progressPct = (LibraryOrganizationManager.estimateBookProgress(context, book) * 100).toInt()
+                                        val coverGradient = when (book.format.uppercase(Locale.ROOT)) {
+                                            "EPUB" -> Brush.verticalGradient(listOf(Color(0xFF1F4E43), Color(0xFF10241F)))
+                                            "PDF" -> Brush.verticalGradient(listOf(Color(0xFF6A3B28), Color(0xFF261711)))
+                                            "WEB" -> Brush.verticalGradient(listOf(Color(0xFF28466A), Color(0xFF111D2B)))
+                                            else -> Brush.verticalGradient(listOf(Color(0xFF4D3B27), Color(0xFF1E1710)))
+                                        }
+
+                                        Box(
+                                            modifier = Modifier
+                                                .then(
+                                                    if (libraryLayoutMode == LibraryLayoutMode.GRID) {
+                                                        Modifier
+                                                            .fillMaxWidth()
+                                                            .height(225.dp)
+                                                    } else if (compact) {
+                                                        Modifier
+                                                            .fillMaxWidth()
+                                                            .height(74.dp)
+                                                    } else {
+                                                        Modifier
+                                                            .fillMaxWidth()
+                                                            .height(106.dp)
+                                                    }
+                                                )
+                                                .clip(RoundedCornerShape(16.dp))
+                                                .background(coverGradient)
+                                                .clickable { openBookMeta(book) }
+                                        ) {
+                                            if (libraryLayoutMode == LibraryLayoutMode.GRID) {
+                                                Column(
+                                                    modifier = Modifier
+                                                        .fillMaxSize()
+                                                        .padding(12.dp),
+                                                    verticalArrangement = Arrangement.SpaceBetween
+                                                ) {
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Surface(
+                                                            shape = RoundedCornerShape(8.dp),
+                                                            color = Color.Black.copy(alpha = 0.55f)
+                                                        ) {
+                                                            Text(
+                                                                text = if (progressPct >= 100) "DONE" else "$progressPct%",
+                                                                color = Color.White,
+                                                                fontSize = 11.sp,
+                                                                fontWeight = FontWeight.Bold,
+                                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                                            )
+                                                        }
+                                                        Row {
+                                                            IconButton(
+                                                                onClick = { categoryTargetBook = book },
+                                                                modifier = Modifier.size(28.dp)
+                                                            ) {
+                                                                Icon(Icons.Rounded.Label, contentDescription = "Categoria", tint = Color.White)
+                                                            }
+                                                            IconButton(
+                                                                onClick = { requestSecretShelfAccess(book) },
+                                                                modifier = Modifier.size(28.dp)
+                                                            ) {
+                                                                Icon(
+                                                                    imageVector = if (metaOrg?.isSecret == true) Icons.Rounded.LockOpen else Icons.Rounded.Lock,
+                                                                    contentDescription = "Estante secreta",
+                                                                    tint = Color.White
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+
+                                                    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                                                        Text(
+                                                            text = book.title,
+                                                            fontWeight = FontWeight.Bold,
+                                                            fontSize = 15.sp,
+                                                            color = Color.White,
+                                                            maxLines = 2,
+                                                            overflow = TextOverflow.Ellipsis
+                                                        )
+                                                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                            Surface(
+                                                                shape = RoundedCornerShape(6.dp),
+                                                                color = Color.Black.copy(alpha = 0.48f)
+                                                            ) {
+                                                                Text(
+                                                                    text = book.format,
+                                                                    color = Color.White,
+                                                                    fontSize = 10.sp,
+                                                                    fontWeight = FontWeight.SemiBold,
+                                                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                                                )
+                                                            }
+                                                            Surface(
+                                                                shape = RoundedCornerShape(6.dp),
+                                                                color = Color.Black.copy(alpha = 0.48f)
+                                                            ) {
+                                                                Text(
+                                                                    text = metaOrg?.category ?: "A ler",
+                                                                    color = Color.White,
+                                                                    fontSize = 10.sp,
+                                                                    maxLines = 1,
+                                                                    overflow = TextOverflow.Ellipsis,
+                                                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                                                )
+                                                            }
+                                                        }
+                                                        Row(
+                                                            modifier = Modifier.fillMaxWidth(),
+                                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                                            verticalAlignment = Alignment.CenterVertically
+                                                        ) {
+                                                            LinearProgressIndicator(
+                                                                progress = { (progressPct / 100f).coerceIn(0f, 1f) },
+                                                                modifier = Modifier
+                                                                    .weight(1f)
+                                                                    .height(4.dp)
+                                                                    .clip(CircleShape)
+                                                            )
+                                                            IconButton(
+                                                                onClick = {
+                                                                    LibraryManager.deleteBook(context, book.id)
+                                                                    refreshLibraryAndOrg()
+                                                                },
+                                                                modifier = Modifier.size(28.dp)
+                                                            ) {
+                                                                Icon(Icons.Rounded.Delete, contentDescription = "Remover", tint = Color.White.copy(alpha = 0.85f))
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            } else {
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxSize()
+                                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .size(if (compact) 44.dp else 64.dp)
+                                                            .clip(RoundedCornerShape(10.dp))
+                                                            .background(Color.Black.copy(alpha = 0.35f)),
+                                                        contentAlignment = Alignment.Center
+                                                    ) {
+                                                        Text(
+                                                            text = book.format,
+                                                            color = Color.White,
+                                                            fontSize = 10.sp,
+                                                            fontWeight = FontWeight.Bold
+                                                        )
+                                                    }
+                                                    Spacer(modifier = Modifier.width(10.dp))
+                                                    Column(modifier = Modifier.weight(1f)) {
+                                                        Text(
+                                                            text = book.title,
+                                                            fontWeight = FontWeight.Bold,
+                                                            fontSize = if (compact) 14.sp else 15.sp,
+                                                            color = Color.White,
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis
+                                                        )
+                                                        if (!compact) {
+                                                            Text(
+                                                                text = "${book.format} • ${metaOrg?.category ?: "A ler"} • $progressPct%",
+                                                                fontSize = 12.sp,
+                                                                color = Color.White.copy(alpha = 0.8f),
+                                                                maxLines = 1,
+                                                                overflow = TextOverflow.Ellipsis
+                                                            )
+                                                        }
+                                                    }
+                                                    if (!compact) {
+                                                        IconButton(onClick = { categoryTargetBook = book }) {
+                                                            Icon(Icons.Rounded.Label, contentDescription = "Categoria", tint = Color.White)
+                                                        }
+                                                        IconButton(onClick = { requestSecretShelfAccess(book) }) {
+                                                            Icon(
+                                                                imageVector = if (metaOrg?.isSecret == true) Icons.Rounded.LockOpen else Icons.Rounded.Lock,
+                                                                contentDescription = "Estante secreta",
+                                                                tint = Color.White
+                                                            )
+                                                        }
+                                                    }
+                                                    IconButton(onClick = {
+                                                        LibraryManager.deleteBook(context, book.id)
+                                                        refreshLibraryAndOrg()
+                                                    }) {
+                                                        Icon(Icons.Rounded.Delete, contentDescription = "Remover", tint = Color.White)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    @Composable
+                                    fun LibraryHeaderControls() {
+                                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                             Row(
                                                 modifier = Modifier.fillMaxWidth(),
                                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1976,6 +2237,23 @@ class MainActivity : ComponentActivity() {
                                                     modifier = Modifier.weight(1f)
                                                 )
                                                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                    IconButton(onClick = {
+                                                        libraryLayoutMode = when (libraryLayoutMode) {
+                                                            LibraryLayoutMode.GRID -> LibraryLayoutMode.LIST
+                                                            LibraryLayoutMode.LIST -> LibraryLayoutMode.COMPACT
+                                                            LibraryLayoutMode.COMPACT -> LibraryLayoutMode.GRID
+                                                        }
+                                                    }) {
+                                                        Icon(
+                                                            imageVector = when (libraryLayoutMode) {
+                                                                LibraryLayoutMode.GRID -> Icons.Rounded.GridView
+                                                                LibraryLayoutMode.LIST -> Icons.Rounded.ViewAgenda
+                                                                LibraryLayoutMode.COMPACT -> Icons.Rounded.ViewList
+                                                            },
+                                                            contentDescription = "Vista: ${libraryLayoutMode.label}",
+                                                            tint = currentTheme.text
+                                                        )
+                                                    }
                                                     IconButton(onClick = { showDuplicatesSheet = true }) {
                                                         BadgedBox(badge = {
                                                             if (duplicateCount > 0) {
@@ -2012,9 +2290,7 @@ class MainActivity : ComponentActivity() {
                                                     }
                                                 }
                                             }
-                                        }
 
-                                        item {
                                             OutlinedTextField(
                                                 value = librarySearchQuery,
                                                 onValueChange = { librarySearchQuery = it },
@@ -2023,10 +2299,8 @@ class MainActivity : ComponentActivity() {
                                                 singleLine = true,
                                                 modifier = Modifier.fillMaxWidth()
                                             )
-                                        }
 
-                                        if (!showSecretShelf) {
-                                            item {
+                                            if (!showSecretShelf) {
                                                 Row(
                                                     modifier = Modifier
                                                         .fillMaxWidth()
@@ -2051,9 +2325,7 @@ class MainActivity : ComponentActivity() {
                                                     )
                                                 }
                                             }
-                                        }
 
-                                        item {
                                             Row(
                                                 modifier = Modifier
                                                     .fillMaxWidth()
@@ -2061,6 +2333,13 @@ class MainActivity : ComponentActivity() {
                                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
+                                                LibraryLayoutMode.entries.forEach { modeOpt ->
+                                                    FilterChip(
+                                                        selected = libraryLayoutMode == modeOpt,
+                                                        onClick = { libraryLayoutMode = modeOpt },
+                                                        label = { Text(modeOpt.label, maxLines = 1, softWrap = false) }
+                                                    )
+                                                }
                                                 listOf("Todos", "EPUB", "PDF", "TXT", "WEB").forEach { fmt ->
                                                     FilterChip(
                                                         selected = formatFilter == fmt,
@@ -2077,61 +2356,68 @@ class MainActivity : ComponentActivity() {
                                                 }
                                             }
                                         }
+                                    }
 
-                                        if (visibleBooks.isEmpty()) {
-                                            item {
-                                                Text(
-                                                    text = if (showSecretShelf) {
-                                                        "A estante secreta está vazia. Usa o ícone de cadeado num livro para o guardar aqui."
-                                                    } else {
-                                                        "Nenhum livro encontrado com os filtros atuais."
-                                                    },
-                                                    color = currentTheme.text.copy(alpha = 0.75f),
-                                                    modifier = Modifier.padding(top = 20.dp)
-                                                )
+                                    if (libraryLayoutMode == LibraryLayoutMode.GRID) {
+                                        LazyVerticalGrid(
+                                            columns = GridCells.Fixed(2),
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .background(currentTheme.bg)
+                                                .padding(16.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                                        ) {
+                                            item(span = { GridItemSpan(maxLineSpan) }) {
+                                                LibraryHeaderControls()
                                             }
-                                        } else {
-                                            items(visibleBooks, key = { it.id }) { book ->
-                                                val metaOrg = orgMetaMap[book.id]
-                                                val progressPct = (LibraryOrganizationManager.estimateBookProgress(context, book) * 100).toInt()
-                                                Card(
-                                                    colors = CardDefaults.cardColors(containerColor = currentTheme.barBg),
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .clickable { openBookMeta(book) }
-                                                ) {
-                                                    Row(
-                                                        modifier = Modifier
-                                                            .fillMaxWidth()
-                                                            .padding(14.dp),
-                                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                                        verticalAlignment = Alignment.CenterVertically
-                                                    ) {
-                                                        Column(modifier = Modifier.weight(1f)) {
-                                                            Text(book.title, fontWeight = FontWeight.Bold, color = currentTheme.text)
-                                                            Text(
-                                                                text = "${book.format} • ${metaOrg?.category ?: "A ler"} • $progressPct%",
-                                                                fontSize = 12.sp,
-                                                                color = currentTheme.text.copy(alpha = 0.7f)
-                                                            )
-                                                        }
-                                                        IconButton(onClick = { categoryTargetBook = book }) {
-                                                            Icon(Icons.Rounded.Label, contentDescription = "Categoria", tint = currentTheme.text)
-                                                        }
-                                                        IconButton(onClick = { requestSecretShelfAccess(book) }) {
-                                                            Icon(
-                                                                imageVector = if (metaOrg?.isSecret == true) Icons.Rounded.LockOpen else Icons.Rounded.Lock,
-                                                                contentDescription = "Estante secreta",
-                                                                tint = currentTheme.text
-                                                            )
-                                                        }
-                                                        IconButton(onClick = {
-                                                            LibraryManager.deleteBook(context, book.id)
-                                                            refreshLibraryAndOrg()
-                                                        }) {
-                                                            Icon(Icons.Rounded.Delete, contentDescription = "Remover", tint = currentTheme.text)
-                                                        }
-                                                    }
+                                            if (visibleBooks.isEmpty()) {
+                                                item(span = { GridItemSpan(maxLineSpan) }) {
+                                                    Text(
+                                                        text = if (showSecretShelf) {
+                                                            "A estante secreta está vazia. Usa o ícone de cadeado num livro para o guardar aqui."
+                                                        } else {
+                                                            "Nenhum livro encontrado com os filtros atuais."
+                                                        },
+                                                        color = currentTheme.text.copy(alpha = 0.75f),
+                                                        modifier = Modifier.padding(top = 20.dp)
+                                                    )
+                                                }
+                                            } else {
+                                                items(visibleBooks, key = { it.id }) { book ->
+                                                    BookCardContent(book = book, compact = false)
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        LazyColumn(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .background(currentTheme.bg)
+                                                .padding(16.dp),
+                                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                                        ) {
+                                            item {
+                                                LibraryHeaderControls()
+                                            }
+                                            if (visibleBooks.isEmpty()) {
+                                                item {
+                                                    Text(
+                                                        text = if (showSecretShelf) {
+                                                            "A estante secreta está vazia. Usa o ícone de cadeado num livro para o guardar aqui."
+                                                        } else {
+                                                            "Nenhum livro encontrado com os filtros atuais."
+                                                        },
+                                                        color = currentTheme.text.copy(alpha = 0.75f),
+                                                        modifier = Modifier.padding(top = 20.dp)
+                                                    )
+                                                }
+                                            } else {
+                                                items(visibleBooks, key = { it.id }) { book ->
+                                                    BookCardContent(
+                                                        book = book,
+                                                        compact = libraryLayoutMode == LibraryLayoutMode.COMPACT
+                                                    )
                                                 }
                                             }
                                         }
@@ -2361,6 +2647,22 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
                                     item {
+                                        Text("Layout da biblioteca", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Row(
+                                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            LibraryLayoutMode.entries.forEach { modeOpt ->
+                                                FilterChip(
+                                                    selected = libraryLayoutMode == modeOpt,
+                                                    onClick = { libraryLayoutMode = modeOpt },
+                                                    label = { Text(modeOpt.label, maxLines = 1, softWrap = false) }
+                                                )
+                                            }
+                                        }
+                                    }
+                                    item {
                                         Text("Reflow padrão ao abrir livros/PDFs", fontWeight = FontWeight.SemiBold, color = currentTheme.text)
                                         ReflowMode.entries.forEach { mode ->
                                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2519,7 +2821,6 @@ class MainActivity : ComponentActivity() {
                                             )
                                         }
 
-                                        // Catálogo completo Edge TTS (incluindo Multilingual)
                                         Spacer(modifier = Modifier.height(8.dp))
                                         Card(
                                             colors = CardDefaults.cardColors(containerColor = currentTheme.barBg),
@@ -2601,7 +2902,6 @@ class MainActivity : ComponentActivity() {
                                             }
                                         }
 
-                                        // Gestor de Vozes Offline: "No aparelho" e "Para baixar"
                                         Spacer(modifier = Modifier.height(10.dp))
                                         Card(
                                             colors = CardDefaults.cardColors(containerColor = currentTheme.barBg),
@@ -2637,7 +2937,7 @@ class MainActivity : ComponentActivity() {
                                                                 .fillMaxWidth()
                                                                 .clickable {
                                                                     selectedOfflineModelId = item.id
-                                                                    selectedProvider = VoiceProviderType.PIPER_LOCAL
+                                                                    selectedProvider = providerForCatalogItem(item)
                                                                     syncVoiceEngineConfig()
                                                                 }
                                                                 .padding(vertical = 4.dp),
@@ -2652,7 +2952,7 @@ class MainActivity : ComponentActivity() {
                                                                     selected = selectedOfflineModelId == item.id,
                                                                     onClick = {
                                                                         selectedOfflineModelId = item.id
-                                                                        selectedProvider = VoiceProviderType.PIPER_LOCAL
+                                                                        selectedProvider = providerForCatalogItem(item)
                                                                         syncVoiceEngineConfig()
                                                                     }
                                                                 )
@@ -2727,6 +3027,8 @@ class MainActivity : ComponentActivity() {
                                                                     catalogRefreshTick++
                                                                     if (mainRes.isSuccess) {
                                                                         selectedOfflineModelId = item.id
+                                                                        selectedProvider = providerForCatalogItem(item)
+                                                                        syncVoiceEngineConfig()
                                                                         voiceDownloadStatus = "Voz ${item.title} instalada no aparelho!"
                                                                     } else {
                                                                         voiceDownloadStatus = "Falha ao baixar ${item.title}: ${mainRes.exceptionOrNull()?.message}"
@@ -2759,22 +3061,34 @@ class MainActivity : ComponentActivity() {
                                                     singleLine = true,
                                                     modifier = Modifier.fillMaxWidth()
                                                 )
-                                                OutlinedButton(onClick = {
-                                                    voiceDownloadStatus = "A baixar e extrair .zip..."
-                                                    scope.launch {
-                                                        val res = voiceEngine.downloadAndExtractVoiceZip(
-                                                            zipUrlOrLocalPath = voiceZipSourceInput,
-                                                            voiceName = "clone_${System.currentTimeMillis()}"
-                                                        )
-                                                        catalogRefreshTick++
-                                                        voiceDownloadStatus = if (res.isSuccess) {
-                                                            "Pacote .zip extraído (${voiceEngine.activeClonedVoiceName})"
-                                                        } else {
-                                                            "Erro .zip: ${res.exceptionOrNull()?.message}"
-                                                        }
+                                                Row(
+                                                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                                ) {
+                                                    OutlinedButton(onClick = {
+                                                        zipPicker.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream"))
+                                                    }) {
+                                                        Text("Escolher .ZIP", maxLines = 1, softWrap = false)
                                                     }
-                                                }) {
-                                                    Text("Baixar / Extrair .ZIP", maxLines = 1, softWrap = false)
+                                                    OutlinedButton(onClick = {
+                                                        voiceDownloadStatus = "A baixar e extrair .zip..."
+                                                        scope.launch {
+                                                            val res = voiceEngine.downloadAndExtractVoiceZip(
+                                                                zipUrlOrLocalPath = voiceZipSourceInput,
+                                                                voiceName = "clone_${System.currentTimeMillis()}"
+                                                            )
+                                                            catalogRefreshTick++
+                                                            voiceDownloadStatus = if (res.isSuccess) {
+                                                                selectedProvider = VoiceProviderType.POCKET_TTS_LOCAL
+                                                                syncVoiceEngineConfig()
+                                                                "Pacote .zip extraído (${voiceEngine.activeClonedVoiceName})"
+                                                            } else {
+                                                                "Erro .zip: ${res.exceptionOrNull()?.message}"
+                                                            }
+                                                        }
+                                                    }) {
+                                                        Text("Baixar / Extrair .ZIP", maxLines = 1, softWrap = false)
+                                                    }
                                                 }
                                                 if (voiceDownloadStatus != null) {
                                                     Text(voiceDownloadStatus!!, fontSize = 12.sp, color = Color(0xFF4F46E5))
