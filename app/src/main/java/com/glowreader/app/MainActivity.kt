@@ -81,12 +81,9 @@ class MainActivity : ComponentActivity() {
             var barsBehaviorMode by remember { mutableStateOf(BarsBehaviorMode.ALWAYS_VISIBLE) }
             var isFullscreenMode by remember { mutableStateOf(false) }
 
-            var defaultReflowMode by remember {
-                mutableStateOf<ReflowMode>(ReadingEnhancementManager.loadDefaultReflowMode(context))
-            }
-            var activeReflowMode by remember {
-                mutableStateOf<ReflowMode>(defaultReflowMode)
-            }
+            val initialReflow = ReadingEnhancementManager.loadDefaultReflowMode(context)
+            var defaultReflowMode by remember { mutableStateOf(initialReflow) }
+            var activeReflowMode by remember { mutableStateOf(initialReflow) }
             var pendingOpenBookMeta by remember { mutableStateOf<SavedBookMeta?>(null) }
 
             var customColors by remember {
@@ -103,7 +100,7 @@ class MainActivity : ComponentActivity() {
             var newCustomColorName by remember { mutableStateOf("") }
 
             var showTranslateSheet by remember { mutableStateOf(false) }
-            var translatedChaptersMap by remember { mutableStateOf>(emptyMap()) }
+            var translatedChaptersMap by remember { mutableStateOf(emptyMap<Int, String>()) }
             var useTranslatedText by remember { mutableStateOf(false) }
             var isTranslating by remember { mutableStateOf(false) }
             var translationProgressText by remember { mutableStateOf<String?>(null) }
