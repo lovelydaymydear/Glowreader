@@ -1,0 +1,537 @@
+package com.glowreader.app
+
+import android.content.Context
+import android.media.MediaPlayer
+import android.os.Bundle
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
+import android.speech.tts.Voice
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
+import java.util.Locale
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
+
+enum class VoiceProviderType(
+    val id: String,
+    val title: String,
+    val subtitle: String,
+    val requiresNetworkOrModel: Boolean
+) {
+    ANDROID_SYSTEM(
+        id = "android_tts",
+        title = "Voz do Sistema Android",
+        subtitle = "Motor TTS nativo do aparelho com vozes instaladas e síntese para ficheiro.",
+        requiresNetworkOrModel = false
+    ),
+    EDGE_ONLINE(
+        id = "edge_tts_online",
+        title = "TTS Online (Estilo Edge / Cloud)",
+        subtitle = "Motor de rede configurável para vozes neurais online (requer internet/endpoint).",
+        requiresNetworkOrModel = true
+    ),
+    PIPER_LOCAL(
+        id = "piper_tts",
+        title = "Piper TTS (Motor Neural Offline)",
+        subtitle = "Arquitetura para modelos locais Piper (.onnx + .json) no armazenamento da app.",
+        requiresNetworkOrModel = true
+    ),
+    KOKORO_POCKET_NEURAL(
+        id = "kokoro_pocket_tts",
+        title = "Kokoro / Pocket TTS (Experimental)",
+        subtitle = "Estrutura extensível para motores neurais pesados / serviço local ou remoto.",
+        requiresNetworkOrModel = true
+    )
+}
+
+data class SentenceSegment(
+    val index: Int,
+    val range: IntRange,
+    val text: String,
+    val estimatedStartMs: Long,
+    val estimatedEndMs: Long
+)
+
+data class SavedAudioTrack(
+    val id: String,
+    val bookTitle: String,
+    val chapterIndex: Int,
+    val chapterTitle: String,
+    val audioFilePath: String,
+    val syncFilePath: String,
+    val createdAt: Long,
+    val segments: List<SentenceSegment>
+)
+
+class VoiceEngineManager(private val context: Context) {
+
+    private var androidTts: TextToSpeech? = null
+    private var mediaPlayer: MediaPlayer? = null
+    private var isTtsInitialized = false
+
+    var currentProvider: VoiceProviderType = VoiceProviderType.ANDROID_SYSTEM
+    var selectedLocale: Locale = Locale("pt", "PT")
+    var selectedVoiceName: String = ""
+    var speechRate: Float = 1.0f
+    var pitch: Float = 1.0f
+    var wordHighlightEnabled: Boolean = true
+    var customOnlineEndpointUrl: String = ""
+
+    private var onSentenceRangeCallback: ((IntRange?) -> Unit)? = null
+    private var onWordRangeCallback: ((IntRange?) -> Unit)? = null
+    private var onPlaybackStateCallback: ((Boolean) -> Unit)? = null
+    private var onChapterFinishedCallback: (() -> Unit)? = null
+
+    private var activeSegments: List<SentenceSegment> = emptyList()
+    private var currentSegmentIndex: Int = 0
+    private var isPlayingInternal: Boolean = false
+
+    fun initializeAndroidTts(
+        onReady: (voices: List<Voice>) -> Unit = {}
+    ) {
+        if (androidTts != null && isTtsInitialized) {
+            onReady(getAvailableVoices())
+            return
+        }
+        androidTts = TextToSpeech(context.applicationContext) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                isTtsInitialized = true
+                androidTts?.language = selectedLocale
+                applyVoiceAndParams()
+                onReady(getAvailableVoices())
+            }
+        }
+        androidTts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) {
+                isPlayingInternal = true
+                onPlaybackStateCallback?.invoke(true)
+            }
+
+            override fun onRangeStart(utteranceId: String?, start: Int, end: Int, frame: Int) {
+                if (!wordHighlightEnabled) return
+                val seg = activeSegments.getOrNull(currentSegmentIndex) ?: return
+                val absStart = (seg.range.first + start).coerceIn(seg.range.first, seg.range.last)
+                val absEnd = (seg.range.first + end).coerceIn(absStart, seg.range.last + 1)
+                if (absStart <= absEnd) {
+                    onWordRangeCallback?.invoke(absStart until absEnd)
+                }
+            }
+
+            override fun onDone(utteranceId: String?) {
+                if (isPlayingInternal) {
+                    playSentenceAt(currentSegmentIndex + 1)
+                }
+            }
+
+            @Deprecated("Deprecated in Java")
+            override fun onError(utteranceId: String?) {
+                isPlayingInternal = false
+                onPlaybackStateCallback?.invoke(false)
+            }
+        })
+    }
+
+    fun getAvailableVoices(): List<Voice> {
+        return androidTts?.voices?.toList()?.sortedWith(
+            compareBy<Voice> { it.locale.displayLanguage }.thenBy { it.name }
+        ) ?: emptyList()
+    }
+
+    fun applyVoiceAndParams() {
+        val engine = androidTts ?: return
+        engine.language = selectedLocale
+        engine.setSpeechRate(speechRate.coerceIn(0.5f, 2.5f))
+        engine.setPitch(pitch.coerceIn(0.5f, 2.0f))
+        if (selectedVoiceName.isNotBlank()) {
+            val matchedVoice = engine.voices?.firstOrNull { it.name == selectedVoiceName }
+            if (matchedVoice != null) {
+                engine.voice = matchedVoice
+            }
+        }
+    }
+
+    fun buildSentenceSegments(text: String): List<SentenceSegment> {
+        if (text.isBlank()) return emptyList()
+        val sentenceRegex = Regex("[^.!?\\n]+[.!?\\n]*")
+        val rawMatches = sentenceRegex.findAll(text)
+            .map { it.range to it.value.trim() }
+            .filter { it.second.isNotEmpty() }
+            .toList()
+
+        if (rawMatches.isEmpty()) return emptyList()
+
+        val result = mutableListOf<SentenceSegment>()
+        var cursorMs = 0L
+        val wordsPerSecond = (2.6f * speechRate).coerceAtLeast(1.0f)
+
+        rawMatches.forEachIndexed { idx, (range, sentence) ->
+            val wordCount = sentence.split(Regex("\\s+")).filter { it.isNotBlank() }.size.coerceAtLeast(1)
+            val durationMs = ((wordCount / wordsPerSecond) * 1000f).toLong().coerceAtLeast(450L)
+            val startMs = cursorMs
+            val endMs = cursorMs + durationMs
+            result.add(
+                SentenceSegment(
+                    index = idx,
+                    range = range,
+                    text = sentence,
+                    estimatedStartMs = startMs,
+                    estimatedEndMs = endMs
+                )
+            )
+            cursorMs = endMs
+        }
+        return result
+    }
+
+    fun estimateWordRangeInSegment(segment: SentenceSegment, progressFraction: Float): IntRange? {
+        if (!wordHighlightEnabled) return null
+        val words = Regex("\\S+").findAll(segment.text).toList()
+        if (words.isEmpty()) return null
+        val clamped = progressFraction.coerceIn(0f, 0.999f)
+        val wordIdx = (clamped * words.size).toInt().coerceIn(0, words.lastIndex)
+        val match = words[wordIdx]
+        val start = segment.range.first + match.range.first
+        val end = segment.range.first + match.range.last + 1
+        return if (start < end) start until end else null
+    }
+
+    fun startReadingText(
+        text: String,
+        onSentenceRange: (IntRange?) -> Unit,
+        onWordRange: (IntRange?) -> Unit,
+        onPlaybackState: (Boolean) -> Unit,
+        onChapterFinished: () -> Unit = {}
+    ) {
+        stopPlayback()
+        onSentenceRangeCallback = onSentenceRange
+        onWordRangeCallback = onWordRange
+        onPlaybackStateCallback = onPlaybackState
+        onChapterFinishedCallback = onChapterFinished
+
+        val segments = buildSentenceSegments(text)
+        if (segments.isEmpty()) {
+            onPlaybackState(false)
+            return
+        }
+
+        activeSegments = segments
+        currentSegmentIndex = 0
+        isPlayingInternal = true
+        onPlaybackState(true)
+
+        when (currentProvider) {
+            VoiceProviderType.ANDROID_SYSTEM -> {
+                if (!isTtsInitialized) {
+                    initializeAndroidTts {
+                        if (isPlayingInternal) {
+                            playSentenceAt(0)
+                        }
+                    }
+                } else {
+                    playSentenceAt(0)
+                }
+            }
+
+            VoiceProviderType.EDGE_ONLINE,
+            VoiceProviderType.PIPER_LOCAL,
+            VoiceProviderType.KOKORO_POCKET_NEURAL -> {
+                // Fallback seguro para síntese nativa quando modelo local ou endpoint online ainda não está configurado
+                if (isTtsInitialized) {
+                    playSentenceAt(0)
+                } else {
+                    initializeAndroidTts {
+                        if (isPlayingInternal) {
+                            playSentenceAt(0)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun playSentenceAt(index: Int) {
+        if (!isPlayingInternal) return
+        if (index >= activeSegments.size) {
+            isPlayingInternal = false
+            onSentenceRangeCallback?.invoke(null)
+            onWordRangeCallback?.invoke(null)
+            onPlaybackStateCallback?.invoke(false)
+            onChapterFinishedCallback?.invoke()
+            return
+        }
+        currentSegmentIndex = index
+        val seg = activeSegments[index]
+        onSentenceRangeCallback?.invoke(seg.range)
+        onWordRangeCallback?.invoke(estimateWordRangeInSegment(seg, 0f))
+
+        applyVoiceAndParams()
+        val params = Bundle().apply {
+            putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "glow_seg_$index")
+        }
+        androidTts?.speak(seg.text, TextToSpeech.QUEUE_FLUSH, params, "glow_seg_$index")
+    }
+
+    fun stopPlayback() {
+        isPlayingInternal = false
+        try {
+            androidTts?.stop()
+        } catch (_: Exception) {
+        }
+        try {
+            mediaPlayer?.stop()
+            mediaPlayer?.release()
+        } catch (_: Exception) {
+        }
+        mediaPlayer = null
+        onSentenceRangeCallback?.invoke(null)
+        onWordRangeCallback?.invoke(null)
+        onPlaybackStateCallback?.invoke(false)
+    }
+
+    fun release() {
+        stopPlayback()
+        try {
+            androidTts?.shutdown()
+        } catch (_: Exception) {
+        }
+        androidTts = null
+        isTtsInitialized = false
+    }
+
+    fun getAudioStorageDir(): File {
+        val dir = File(context.filesDir, "glowreader_audio_tracks")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    suspend fun synthesizeAndSaveChapterAudio(
+        bookTitle: String,
+        chapterIndex: Int,
+        chapterTitle: String,
+        text: String
+    ): Result<SavedAudioTrack> = withContext(Dispatchers.IO) {
+        if (text.isBlank()) {
+            return@withContext Result.failure(IllegalArgumentException("O capítulo não tem texto para gerar áudio."))
+        }
+        if (!isTtsInitialized) {
+            withContext(Dispatchers.Main) {
+                initializeAndroidTts()
+            }
+            var waited = 0
+            while (!isTtsInitialized && waited < 4000) {
+                kotlinx.coroutines.delay(100)
+                waited += 100
+            }
+        }
+        val engine = androidTts
+            ?: return@withContext Result.failure(IllegalStateException("Motor TTS indisponível neste aparelho."))
+
+        val safeId = "${bookTitle.hashCode()}_ch_${chapterIndex}_${System.currentTimeMillis()}"
+        val dir = getAudioStorageDir()
+        val wavFile = File(dir, "$safeId.wav")
+        val syncFile = File(dir, "$safeId.sync.json")
+        val segments = buildSentenceSegments(text)
+
+        val synthesisOk = suspendCoroutine { cont ->
+            withContextMainSafe {
+                applyVoiceAndParams()
+                val utteranceId = "synth_$safeId"
+                engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                    override fun onStart(id: String?) {}
+                    override fun onDone(id: String?) {
+                        if (id == utteranceId) {
+                            cont.resume(true)
+                        }
+                    }
+
+                    @Deprecated("Deprecated in Java")
+                    override fun onError(id: String?) {
+                        if (id == utteranceId) {
+                            cont.resume(false)
+                        }
+                    }
+                })
+                val bundle = Bundle()
+                val res = engine.synthesizeToFile(text.take(3800), bundle, wavFile, utteranceId)
+                if (res != TextToSpeech.SUCCESS) {
+                    cont.resume(false)
+                }
+            }
+        }
+
+        if (!synthesisOk || !wavFile.exists() || wavFile.length() == 0L) {
+            return@withContext Result.failure(IllegalStateException("Não foi possível exportar o ficheiro de áudio."))
+        }
+
+        val track = SavedAudioTrack(
+            id = safeId,
+            bookTitle = bookTitle,
+            chapterIndex = chapterIndex,
+            chapterTitle = chapterTitle,
+            audioFilePath = wavFile.absolutePath,
+            syncFilePath = syncFile.absolutePath,
+            createdAt = System.currentTimeMillis(),
+            segments = segments
+        )
+        writeSyncManifest(track)
+        Result.success(track)
+    }
+
+    private fun withContextMainSafe(block: () -> Unit) {
+        android.os.Handler(context.mainLooper).post(block)
+    }
+
+    private fun writeSyncManifest(track: SavedAudioTrack) {
+        val root = JSONObject().apply {
+            put("id", track.id)
+            put("bookTitle", track.bookTitle)
+            put("chapterIndex", track.chapterIndex)
+            put("chapterTitle", track.chapterTitle)
+            put("audioFilePath", track.audioFilePath)
+            put("createdAt", track.createdAt)
+            val arr = JSONArray()
+            track.segments.forEach { seg ->
+                arr.put(
+                    JSONObject().apply {
+                        put("index", seg.index)
+                        put("startChar", seg.range.first)
+                        put("endChar", seg.range.last)
+                        put("text", seg.text)
+                        put("startMs", seg.estimatedStartMs)
+                        put("endMs", seg.estimatedEndMs)
+                    }
+                )
+            }
+            put("segments", arr)
+        }
+        File(track.syncFilePath).writeText(root.toString(2), Charsets.UTF_8)
+    }
+
+    fun listSavedAudioTracks(): List<SavedAudioTrack> {
+        val dir = getAudioStorageDir()
+        val syncFiles = dir.listFiles { f -> f.isFile && f.name.endsWith(".sync.json") } ?: return emptyList()
+        return syncFiles.mapNotNull { file ->
+            try {
+                val obj = JSONObject(file.readText(Charsets.UTF_8))
+                val audioPath = obj.optString("audioFilePath")
+                if (audioPath.isBlank() || !File(audioPath).exists()) return@mapNotNull null
+                val segArray = obj.optJSONArray("segments") ?: JSONArray()
+                val segs = mutableListOf<SentenceSegment>()
+                for (i in 0 until segArray.length()) {
+                    val sObj = segArray.getJSONObject(i)
+                    val startChar = sObj.optInt("startChar", 0)
+                    val endChar = sObj.optInt("endChar", 0)
+                    segs.add(
+                        SentenceSegment(
+                            index = sObj.optInt("index", i),
+                            range = startChar..endChar,
+                            text = sObj.optString("text", ""),
+                            estimatedStartMs = sObj.optLong("startMs", 0L),
+                            estimatedEndMs = sObj.optLong("endMs", 0L)
+                        )
+                    )
+                }
+                SavedAudioTrack(
+                    id = obj.optString("id", file.nameWithoutExtension),
+                    bookTitle = obj.optString("bookTitle", "Livro"),
+                    chapterIndex = obj.optInt("chapterIndex", 0),
+                    chapterTitle = obj.optString("chapterTitle", "Capítulo"),
+                    audioFilePath = audioPath,
+                    syncFilePath = file.absolutePath,
+                    createdAt = obj.optLong("createdAt", file.lastModified()),
+                    segments = segs
+                )
+            } catch (_: Exception) {
+                null
+            }
+        }.sortedByDescending { it.createdAt }
+    }
+
+    fun playSavedTrackWithSync(
+        track: SavedAudioTrack,
+        onSentenceRange: (IntRange?) -> Unit,
+        onWordRange: (IntRange?) -> Unit,
+        onPlaybackState: (Boolean) -> Unit,
+        onTickPositionMs: (currentMs: Int, durationMs: Int) -> Unit = { _, _ -> }
+    ) {
+        stopPlayback()
+        val file = File(track.audioFilePath)
+        if (!file.exists()) {
+            onPlaybackState(false)
+            return
+        }
+        val mp = MediaPlayer().apply {
+            setDataSource(file.absolutePath)
+            prepare()
+            start()
+        }
+        mediaPlayer = mp
+        isPlayingInternal = true
+        onPlaybackState(true)
+
+        mp.setOnCompletionListener {
+            stopPlayback()
+            onTickPositionMs(0, mp.duration.coerceAtLeast(0))
+        }
+
+        android.os.Handler(context.mainLooper).post(object : Runnable {
+            override fun run() {
+                val player = mediaPlayer
+                if (!isPlayingInternal || player == null) return
+                try {
+                    if (player.isPlaying) {
+                        val posMs = player.currentPosition.coerceAtLeast(0)
+                        val durMs = player.duration.coerceAtLeast(1)
+                        onTickPositionMs(posMs, durMs)
+
+                        val matched = track.segments.firstOrNull { posMs in it.estimatedStartMs..it.estimatedEndMs }
+                            ?: track.segments.lastOrNull { posMs >= it.estimatedStartMs }
+                        if (matched != null) {
+                            onSentenceRange(matched.range)
+                            val span = (matched.estimatedEndMs - matched.estimatedStartMs).coerceAtLeast(1L).toFloat()
+                            val frac = ((posMs - matched.estimatedStartMs).toFloat() / span).coerceIn(0f, 1f)
+                            onWordRange(estimateWordRangeInSegment(matched, frac))
+                        }
+                        android.os.Handler(context.mainLooper).postDelayed(this, 140L)
+                    }
+                } catch (_: Exception) {
+                }
+            }
+        })
+    }
+
+    fun checkLocalPiperModels(): List<File> {
+        val piperDir = File(context.filesDir, "piper_models")
+        if (!piperDir.exists()) return emptyList()
+        return piperDir.listFiles { f -> f.isFile && f.extension.equals("onnx", ignoreCase = true) }
+            ?.toList()
+            ?: emptyList()
+    }
+
+    suspend fun testOnlineEndpoint(endpointUrl: String, sampleText: String = "Olá, este é um teste de voz."): Boolean =
+        withContext(Dispatchers.IO) {
+            val trimmed = endpointUrl.trim()
+            if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) return@withContext false
+            var conn: HttpURLConnection? = null
+            return@withContext try {
+                val sep = if (trimmed.contains("?")) "&" else "?"
+                val full = "$trimmed${sep}text=${URLEncoder.encode(sampleText, "UTF-8")}"
+                conn = (URL(full).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    connectTimeout = 8000
+                    readTimeout = 8000
+                }
+                conn.responseCode in 200..299
+            } catch (_: Exception) {
+                false
+            } finally {
+                conn?.disconnect()
+            }
+        }
+}
