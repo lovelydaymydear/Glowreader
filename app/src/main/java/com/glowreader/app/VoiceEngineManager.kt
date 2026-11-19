@@ -15,10 +15,12 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.util.Locale
+import java.util.zip.ZipInputStream
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 
@@ -37,22 +39,33 @@ enum class VoiceProviderType(
     EDGE_ONLINE(
         id = "edge_tts_online",
         title = "TTS Online (Estilo Edge / Cloud)",
-        subtitle = "Motor de rede configurável para vozes neurais online (requer internet/endpoint).",
+        subtitle = "Usa endpoint online pré-configurado no código com fallback automático.",
         requiresNetworkOrModel = true
     ),
     PIPER_LOCAL(
         id = "piper_tts",
         title = "Piper TTS (Motor Neural Offline)",
-        subtitle = "Arquitetura para modelos locais Piper (.onnx + .json) no armazenamento da app.",
+        subtitle = "Modelos locais Piper (.onnx + .onnx.json) descarregados do Hugging Face.",
         requiresNetworkOrModel = true
     ),
     KOKORO_POCKET_NEURAL(
         id = "kokoro_pocket_tts",
-        title = "Kokoro / Pocket TTS (Experimental)",
-        subtitle = "Estrutura extensível para motores neurais pesados / serviço local ou remoto.",
+        title = "Kokoro / Pocket TTS & Clonador (.zip)",
+        subtitle = "Modelos Kokoro / Pocket TTS do Hugging Face e pacotes de clonagem de voz (.zip).",
         requiresNetworkOrModel = true
     )
 }
+
+data class HuggingFaceModelPreset(
+    val id: String,
+    val category: String,
+    val title: String,
+    val downloadUrl: String,
+    val targetSubdir: String,
+    val fileName: String,
+    val companionUrl: String? = null,
+    val companionFileName: String? = null
+)
 
 data class SentenceSegment(
     val index: Int,
@@ -75,6 +88,53 @@ data class SavedAudioTrack(
 
 class VoiceEngineManager(private val context: Context) {
 
+    companion object {
+        const val DEFAULT_ONLINE_TTS_ENDPOINT = "https://api.streamelements.com/kappa/v2/speech?voice=Vitoria"
+        val FALLBACK_ONLINE_ENDPOINTS = listOf(
+            "https://api.streamelements.com/kappa/v2/speech?voice=Vitoria",
+            "https://translate.google.com/translate_tts?ie=UTF-8&tl=pt&client=tw-ob"
+        )
+
+        val HUGGINGFACE_PRESETS = listOf(
+            HuggingFaceModelPreset(
+                id = "piper_pt_jeff",
+                category = "Piper TTS",
+                title = "Piper PT-BR Jeff (Medium .onnx + .json)",
+                downloadUrl = "https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/jeff/medium/pt_BR-jeff-medium.onnx",
+                targetSubdir = "piper_models",
+                fileName = "pt_BR-jeff-medium.onnx",
+                companionUrl = "https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/jeff/medium/pt_BR-jeff-medium.onnx.json",
+                companionFileName = "pt_BR-jeff-medium.onnx.json"
+            ),
+            HuggingFaceModelPreset(
+                id = "piper_pt_edresson",
+                category = "Piper TTS",
+                title = "Piper PT-BR Edresson (Low .onnx + .json)",
+                downloadUrl = "https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/edresson/low/pt_BR-edresson-low.onnx",
+                targetSubdir = "piper_models",
+                fileName = "pt_BR-edresson-low.onnx",
+                companionUrl = "https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/edresson/low/pt_BR-edresson-low.onnx.json",
+                companionFileName = "pt_BR-edresson-low.onnx.json"
+            ),
+            HuggingFaceModelPreset(
+                id = "kokoro_82m_onnx",
+                category = "Kokoro TTS",
+                title = "Kokoro-82M ONNX (Hugging Face)",
+                downloadUrl = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/onnx/model_q8f16.onnx",
+                targetSubdir = "kokoro_models",
+                fileName = "kokoro-82m-q8f16.onnx"
+            ),
+            HuggingFaceModelPreset(
+                id = "pocket_tts_bundle",
+                category = "Pocket TTS",
+                title = "Pocket TTS Config / Bundle (Hugging Face)",
+                downloadUrl = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/config.json",
+                targetSubdir = "pocket_tts_models",
+                fileName = "pocket_tts_config.json"
+            )
+        )
+    }
+
     private val mainHandler = Handler(Looper.getMainLooper())
     private var androidTts: TextToSpeech? = null
     private var mediaPlayer: MediaPlayer? = null
@@ -86,7 +146,8 @@ class VoiceEngineManager(private val context: Context) {
     var speechRate: Float = 1.0f
     var pitch: Float = 1.0f
     var wordHighlightEnabled: Boolean = true
-    var customOnlineEndpointUrl: String = ""
+    var customOnlineEndpointUrl: String = DEFAULT_ONLINE_TTS_ENDPOINT
+    var activeClonedVoiceName: String = ""
 
     private var onSentenceRangeCallback: ((IntRange?) -> Unit)? = null
     private var onWordRangeCallback: ((IntRange?) -> Unit)? = null
@@ -106,15 +167,13 @@ class VoiceEngineManager(private val context: Context) {
             if (seg != null) {
                 onSentenceRangeCallback?.invoke(seg.range)
                 if (wordHighlightEnabled && !receivedNativeRangeEvents) {
-                    val expectedDurationMs = ((seg.estimatedEndMs - seg.estimatedStartMs) / speechRate.coerceAtLeast(0.5f))
-                        .toLong()
-                        .coerceAtLeast(500L)
+                    val expectedDurationMs = estimateSegmentDurationMs(seg.text, speechRate)
                     val elapsedMs = (SystemClock.elapsedRealtime() - segmentStartElapsedMs).coerceAtLeast(0L)
-                    val frac = (elapsedMs.toFloat() / expectedDurationMs.toFloat()).coerceIn(0f, 0.99f)
+                    val frac = (elapsedMs.toFloat() / expectedDurationMs.toFloat()).coerceIn(0f, 0.995f)
                     onWordRangeCallback?.invoke(estimateWordRangeInSegment(seg, frac))
                 }
             }
-            mainHandler.postDelayed(this, 160L)
+            mainHandler.postDelayed(this, 90L)
         }
     }
 
@@ -131,12 +190,14 @@ class VoiceEngineManager(private val context: Context) {
             if (!wordHighlightEnabled) return
             mainHandler.post {
                 if (!isPlayingInternal) return@post
-                receivedNativeRangeEvents = true
                 val seg = activeSegments.getOrNull(currentSegmentIndex) ?: return@post
-                val absStart = (seg.range.first + start).coerceIn(seg.range.first, seg.range.last)
-                val absEnd = (seg.range.first + end).coerceIn(absStart, seg.range.last + 1)
-                if (absStart < absEnd) {
-                    onWordRangeCallback?.invoke(absStart until absEnd)
+                if (end > start && end <= seg.text.length + 4) {
+                    receivedNativeRangeEvents = true
+                    val absStart = (seg.range.first + start).coerceIn(seg.range.first, seg.range.last)
+                    val absEnd = (seg.range.first + end).coerceIn(absStart, seg.range.last + 1)
+                    if (absStart < absEnd) {
+                        onWordRangeCallback?.invoke(absStart until absEnd)
+                    }
                 }
             }
         }
@@ -157,6 +218,17 @@ class VoiceEngineManager(private val context: Context) {
                 }
             }
         }
+    }
+
+    private fun estimateSegmentDurationMs(sentence: String, rate: Float): Long {
+        val effectiveRate = rate.coerceIn(0.5f, 2.5f)
+        val words = sentence.split(Regex("\\s+")).filter { it.isNotBlank() }
+        val baseMs = words.sumOf { w ->
+            val cleanLen = w.replace(Regex("[^\\p{L}\\p{N}]"), "").length.coerceAtLeast(2)
+            val pauseBonus = if (w.endsWith(",") || w.endsWith(";") || w.endsWith(":")) 140L else 0L
+            (cleanLen * 52L) + pauseBonus
+        }.coerceAtLeast(550L)
+        return (baseMs / effectiveRate).toLong().coerceAtLeast(400L)
     }
 
     fun initializeAndroidTts(
@@ -209,11 +281,9 @@ class VoiceEngineManager(private val context: Context) {
 
         val result = mutableListOf<SentenceSegment>()
         var cursorMs = 0L
-        val wordsPerSecond = (2.7f * speechRate).coerceAtLeast(1.0f)
 
         rawMatches.forEachIndexed { idx, (range, sentence) ->
-            val wordCount = sentence.split(Regex("\\s+")).filter { it.isNotBlank() }.size.coerceAtLeast(1)
-            val durationMs = ((wordCount / wordsPerSecond) * 1000f).toLong().coerceAtLeast(500L)
+            val durationMs = estimateSegmentDurationMs(sentence, speechRate)
             val startMs = cursorMs
             val endMs = cursorMs + durationMs
             result.add(
@@ -234,9 +304,25 @@ class VoiceEngineManager(private val context: Context) {
         if (!wordHighlightEnabled) return null
         val words = Regex("\\S+").findAll(segment.text).toList()
         if (words.isEmpty()) return null
-        val clamped = progressFraction.coerceIn(0f, 0.999f)
-        val wordIdx = (clamped * words.size).toInt().coerceIn(0, words.lastIndex)
-        val match = words[wordIdx]
+        val weights = words.map { m ->
+            val len = m.value.replace(Regex("[^\\p{L}\\p{N}]"), "").length.coerceAtLeast(2)
+            val extra = if (m.value.endsWith(",") || m.value.endsWith(";")) 3 else 0
+            (len + extra).toFloat()
+        }
+        val totalWeight = weights.sum().coerceAtLeast(1f)
+        val targetWeight = progressFraction.coerceIn(0f, 0.999f) * totalWeight
+
+        var acc = 0f
+        var chosenIndex = words.lastIndex
+        for (i in words.indices) {
+            acc += weights[i]
+            if (targetWeight <= acc) {
+                chosenIndex = i
+                break
+            }
+        }
+
+        val match = words[chosenIndex]
         val start = segment.range.first + match.range.first
         val end = segment.range.first + match.range.last + 1
         return if (start < end) start until end else null
@@ -551,7 +637,7 @@ class VoiceEngineManager(private val context: Context) {
                             val frac = ((posMs - matched.estimatedStartMs).toFloat() / span).coerceIn(0f, 1f)
                             onWordRange(estimateWordRangeInSegment(matched, frac))
                         }
-                        mainHandler.postDelayed(this, 140L)
+                        mainHandler.postDelayed(this, 100L)
                     }
                 } catch (_: Exception) {
                 }
@@ -567,24 +653,146 @@ class VoiceEngineManager(private val context: Context) {
             ?: emptyList()
     }
 
-    suspend fun testOnlineEndpoint(endpointUrl: String, sampleText: String = "Olá, este é um teste de voz."): Boolean =
-        withContext(Dispatchers.IO) {
-            val trimmed = endpointUrl.trim()
-            if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) return@withContext false
+    fun listDownloadedNeuralItems(): List<File> {
+        val dirs = listOf("piper_models", "kokoro_models", "pocket_tts_models", "cloned_voices")
+        return dirs.flatMap { sub ->
+            val d = File(context.filesDir, sub)
+            if (!d.exists()) emptyList() else d.listFiles()?.filter { it.isFile }?.toList() ?: emptyList()
+        }
+    }
+
+    suspend fun downloadFileFromUrl(
+        urlStr: String,
+        targetSubdir: String,
+        outputFileName: String
+    ): Result<File> = withContext(Dispatchers.IO) {
+        val cleanUrl = urlStr.trim()
+        if (!cleanUrl.startsWith("https://") && !cleanUrl.startsWith("http://")) {
+            return@withContext Result.failure(IllegalArgumentException("URL inválido no Hugging Face."))
+        }
+        var conn: HttpURLConnection? = null
+        return@withContext try {
+            val dir = File(context.filesDir, targetSubdir).apply { if (!exists()) mkdirs() }
+            val outFile = File(dir, outputFileName)
+            conn = (URL(cleanUrl).openConnection() as HttpURLConnection).apply {
+                instanceFollowRedirects = true
+                connectTimeout = 15000
+                readTimeout = 30000
+                setRequestProperty("User-Agent", "GlowReader/1.0")
+            }
+            if (conn.responseCode !in 200..299) {
+                return@withContext Result.failure(IllegalStateException("HTTP ${conn.responseCode} ao descarregar modelo."))
+            }
+            conn.inputStream.use { input ->
+                FileOutputStream(outFile).use { output ->
+                    val buf = ByteArray(8192)
+                    while (true) {
+                        val read = input.read(buf)
+                        if (read <= 0) break
+                        output.write(buf, 0, read)
+                    }
+                    output.flush()
+                }
+            }
+            if (!outFile.exists() || outFile.length() == 0L) {
+                return@withContext Result.failure(IllegalStateException("Ficheiro descarregado vazio."))
+            }
+            Result.success(outFile)
+        } catch (e: Exception) {
+            Result.failure(e)
+        } finally {
+            conn?.disconnect()
+        }
+    }
+
+    suspend fun downloadAndExtractVoiceZip(
+        zipUrlOrLocalPath: String,
+        voiceName: String = "clone_voz"
+    ): Result<File> = withContext(Dispatchers.IO) {
+        val raw = zipUrlOrLocalPath.trim()
+        val clonesRoot = File(context.filesDir, "cloned_voices").apply { if (!exists()) mkdirs() }
+        val safeName = voiceName.trim().replace(Regex("[^a-zA-Z0-9_-]"), "_").ifBlank { "clone_voz" }
+        val extractDir = File(clonesRoot, safeName).apply { if (!exists()) mkdirs() }
+        val tempZip = File(context.cacheDir, "$safeName.zip")
+
+        try {
+            if (raw.startsWith("https://") || raw.startsWith("http://")) {
+                val dl = downloadFileFromUrl(raw, "cloned_voices", "$safeName.zip")
+                if (dl.isFailure) {
+                    return@withContext Result.failure(dl.exceptionOrNull() ?: IllegalStateException("Falha ao baixar .zip"))
+                }
+                dl.getOrThrow().copyTo(tempZip, overwrite = true)
+            } else {
+                val localZip = File(raw)
+                if (!localZip.exists() || !localZip.isFile) {
+                    return@withContext Result.failure(IllegalArgumentException("Ficheiro .zip não encontrado."))
+                }
+                localZip.copyTo(tempZip, overwrite = true)
+            }
+
+            var extractedCount = 0
+            ZipInputStream(tempZip.inputStream().buffered()).use { zis ->
+                var entry = zis.nextEntry
+                while (entry != null) {
+                    val destFile = File(extractDir, entry.name)
+                    if (!destFile.canonicalPath.startsWith(extractDir.canonicalPath)) {
+                        entry = zis.nextEntry
+                        continue
+                    }
+                    if (entry.isDirectory) {
+                        destFile.mkdirs()
+                    } else {
+                        destFile.parentFile?.mkdirs()
+                        FileOutputStream(destFile).use { fos ->
+                            zis.copyTo(fos)
+                        }
+                        extractedCount++
+                    }
+                    zis.closeEntry()
+                    entry = zis.nextEntry
+                }
+            }
+            if (tempZip.exists()) tempZip.delete()
+            if (extractedCount == 0) {
+                return@withContext Result.failure(IllegalStateException("O ficheiro .zip não continha ficheiros."))
+            }
+            activeClonedVoiceName = safeName
+            Result.success(extractDir)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun testOnlineEndpoint(
+        endpointUrl: String = DEFAULT_ONLINE_TTS_ENDPOINT,
+        sampleText: String = "Olá, este é um teste de voz."
+    ): Boolean = withContext(Dispatchers.IO) {
+        val candidates = buildList {
+            val chosen = endpointUrl.trim()
+            if (chosen.startsWith("http://") || chosen.startsWith("https://")) add(chosen)
+            addAll(FALLBACK_ONLINE_ENDPOINTS)
+        }.distinct()
+
+        for (candidate in candidates) {
             var conn: HttpURLConnection? = null
-            return@withContext try {
-                val sep = if (trimmed.contains("?")) "&" else "?"
-                val full = "$trimmed${sep}text=${URLEncoder.encode(sampleText, "UTF-8")}"
+            try {
+                val sep = if (candidate.contains("?")) "&" else "?"
+                val full = "$candidate${sep}text=${URLEncoder.encode(sampleText, "UTF-8")}"
                 conn = (URL(full).openConnection() as HttpURLConnection).apply {
                     requestMethod = "GET"
-                    connectTimeout = 8000
-                    readTimeout = 8000
+                    connectTimeout = 7000
+                    readTimeout = 7000
+                    setRequestProperty("User-Agent", "Mozilla/5.0")
                 }
-                conn.responseCode in 200..299
+                if (conn.responseCode in 200..299) {
+                    customOnlineEndpointUrl = candidate
+                    return@withContext true
+                }
             } catch (_: Exception) {
-                false
             } finally {
                 conn?.disconnect()
             }
         }
+        false
+    }
 }
