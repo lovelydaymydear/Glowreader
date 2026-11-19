@@ -402,7 +402,6 @@ class MainActivity : ComponentActivity() {
             if (showColorMixerDialog) {
                 val mixedPreview = ReadingEnhancementManager.mixColors(mixColorA, mixColorB, mixRatio)
                 val rgbPreview = ReadingEnhancementManager.buildColorFromRgb(rgbRed.toInt(), rgbGreen.toInt(), rgbBlue.toInt())
-                val activePreview = if (newCustomColorName.contains("RGB", ignoreCase = true)) rgbPreview else mixedPreview
 
                 AlertDialog(
                     onDismissRequest = { showColorMixerDialog = false },
