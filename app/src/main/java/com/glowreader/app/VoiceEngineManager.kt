@@ -3,6 +3,8 @@ package com.glowreader.app
 import android.content.Context
 import android.media.MediaPlayer
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
@@ -71,6 +73,7 @@ data class SavedAudioTrack(
 
 class VoiceEngineManager(private val context: Context) {
 
+    private val mainHandler = Handler(Looper.getMainLooper())
     private var androidTts: TextToSpeech? = null
     private var mediaPlayer: MediaPlayer? = null
     private var isTtsInitialized = false
@@ -90,12 +93,75 @@ class VoiceEngineManager(private val context: Context) {
 
     private var activeSegments: List<SentenceSegment> = emptyList()
     private var currentSegmentIndex: Int = 0
+    private var segmentStartElapsedMs: Long = 0L
     private var isPlayingInternal: Boolean = false
+    private var receivedNativeRangeEvents: Boolean = false
+
+    private val wordProgressRunnable = object : Runnable {
+        override fun run() {
+            if (!isPlayingInternal) return
+            val seg = activeSegments.getOrNull(currentSegmentIndex)
+            if (seg != null) {
+                onSentenceRangeCallback?.invoke(seg.range)
+                if (wordHighlightEnabled && !receivedNativeRangeEvents) {
+                    val expectedDurationMs = ((seg.estimatedEndMs - seg.estimatedStartMs) / speechRate.coerceAtLeast(0.5f))
+                        .toLong()
+                        .coerceAtLeast(500L)
+                    val elapsedMs = (android.os.SystemClock.elapsedRealtime() - segmentStartElapsedMs).coerceAtLeast(0L)
+                    val frac = (elapsedMs.toFloat() / expectedDurationMs.toFloat()).coerceIn(0f, 0.99f)
+                    onWordRangeCallback?.invoke(estimateWordRangeInSegment(seg, frac))
+                }
+            }
+            mainHandler.postDelayed(this, 160L)
+        }
+    }
+
+    private val playbackUtteranceListener = object : UtteranceProgressListener() {
+        override fun onStart(utteranceId: String?) {
+            mainHandler.post {
+                if (!isPlayingInternal) return@post
+                segmentStartElapsedMs = android.os.SystemClock.elapsedRealtime()
+                onPlaybackStateCallback?.invoke(true)
+            }
+        }
+
+        override fun onRangeStart(utteranceId: String?, start: Int, end: Int, frame: Int) {
+            if (!wordHighlightEnabled) return
+            mainHandler.post {
+                if (!isPlayingInternal) return@post
+                receivedNativeRangeEvents = true
+                val seg = activeSegments.getOrNull(currentSegmentIndex) ?: return@post
+                val absStart = (seg.range.first + start).coerceIn(seg.range.first, seg.range.last)
+                val absEnd = (seg.range.first + end).coerceIn(absStart, seg.range.last + 1)
+                if (absStart < absEnd) {
+                    onWordRangeCallback?.invoke(absStart until absEnd)
+                }
+            }
+        }
+
+        override fun onDone(utteranceId: String?) {
+            mainHandler.post {
+                if (isPlayingInternal) {
+                    playSentenceAt(currentSegmentIndex + 1)
+                }
+            }
+        }
+
+        @Deprecated("Deprecated in Java")
+        override fun onError(utteranceId: String?) {
+            mainHandler.post {
+                if (isPlayingInternal) {
+                    playSentenceAt(currentSegmentIndex + 1)
+                }
+            }
+        }
+    }
 
     fun initializeAndroidTts(
         onReady: (voices: List<Voice>) -> Unit = {}
     ) {
         if (androidTts != null && isTtsInitialized) {
+            androidTts?.setOnUtteranceProgressListener(playbackUtteranceListener)
             onReady(getAvailableVoices())
             return
         }
@@ -103,38 +169,11 @@ class VoiceEngineManager(private val context: Context) {
             if (status == TextToSpeech.SUCCESS) {
                 isTtsInitialized = true
                 androidTts?.language = selectedLocale
+                androidTts?.setOnUtteranceProgressListener(playbackUtteranceListener)
                 applyVoiceAndParams()
                 onReady(getAvailableVoices())
             }
         }
-        androidTts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String?) {
-                isPlayingInternal = true
-                onPlaybackStateCallback?.invoke(true)
-            }
-
-            override fun onRangeStart(utteranceId: String?, start: Int, end: Int, frame: Int) {
-                if (!wordHighlightEnabled) return
-                val seg = activeSegments.getOrNull(currentSegmentIndex) ?: return
-                val absStart = (seg.range.first + start).coerceIn(seg.range.first, seg.range.last)
-                val absEnd = (seg.range.first + end).coerceIn(absStart, seg.range.last + 1)
-                if (absStart <= absEnd) {
-                    onWordRangeCallback?.invoke(absStart until absEnd)
-                }
-            }
-
-            override fun onDone(utteranceId: String?) {
-                if (isPlayingInternal) {
-                    playSentenceAt(currentSegmentIndex + 1)
-                }
-            }
-
-            @Deprecated("Deprecated in Java")
-            override fun onError(utteranceId: String?) {
-                isPlayingInternal = false
-                onPlaybackStateCallback?.invoke(false)
-            }
-        })
     }
 
     fun getAvailableVoices(): List<Voice> {
@@ -168,11 +207,11 @@ class VoiceEngineManager(private val context: Context) {
 
         val result = mutableListOf<SentenceSegment>()
         var cursorMs = 0L
-        val wordsPerSecond = (2.6f * speechRate).coerceAtLeast(1.0f)
+        val wordsPerSecond = (2.7f * speechRate).coerceAtLeast(1.0f)
 
         rawMatches.forEachIndexed { idx, (range, sentence) ->
             val wordCount = sentence.split(Regex("\\s+")).filter { it.isNotBlank() }.size.coerceAtLeast(1)
-            val durationMs = ((wordCount / wordsPerSecond) * 1000f).toLong().coerceAtLeast(450L)
+            val durationMs = ((wordCount / wordsPerSecond) * 1000f).toLong().coerceAtLeast(500L)
             val startMs = cursorMs
             val endMs = cursorMs + durationMs
             result.add(
@@ -222,36 +261,20 @@ class VoiceEngineManager(private val context: Context) {
 
         activeSegments = segments
         currentSegmentIndex = 0
+        receivedNativeRangeEvents = false
         isPlayingInternal = true
         onPlaybackState(true)
+        mainHandler.post(wordProgressRunnable)
 
-        when (currentProvider) {
-            VoiceProviderType.ANDROID_SYSTEM -> {
-                if (!isTtsInitialized) {
-                    initializeAndroidTts {
-                        if (isPlayingInternal) {
-                            playSentenceAt(0)
-                        }
-                    }
-                } else {
+        if (!isTtsInitialized) {
+            initializeAndroidTts {
+                if (isPlayingInternal) {
                     playSentenceAt(0)
                 }
             }
-
-            VoiceProviderType.EDGE_ONLINE,
-            VoiceProviderType.PIPER_LOCAL,
-            VoiceProviderType.KOKORO_POCKET_NEURAL -> {
-                // Fallback seguro para síntese nativa quando modelo local ou endpoint online ainda não está configurado
-                if (isTtsInitialized) {
-                    playSentenceAt(0)
-                } else {
-                    initializeAndroidTts {
-                        if (isPlayingInternal) {
-                            playSentenceAt(0)
-                        }
-                    }
-                }
-            }
+        } else {
+            androidTts?.setOnUtteranceProgressListener(playbackUtteranceListener)
+            playSentenceAt(0)
         }
     }
 
@@ -259,6 +282,7 @@ class VoiceEngineManager(private val context: Context) {
         if (!isPlayingInternal) return
         if (index >= activeSegments.size) {
             isPlayingInternal = false
+            mainHandler.removeCallbacks(wordProgressRunnable)
             onSentenceRangeCallback?.invoke(null)
             onWordRangeCallback?.invoke(null)
             onPlaybackStateCallback?.invoke(false)
@@ -266,19 +290,22 @@ class VoiceEngineManager(private val context: Context) {
             return
         }
         currentSegmentIndex = index
+        segmentStartElapsedMs = android.os.SystemClock.elapsedRealtime()
         val seg = activeSegments[index]
         onSentenceRangeCallback?.invoke(seg.range)
         onWordRangeCallback?.invoke(estimateWordRangeInSegment(seg, 0f))
 
         applyVoiceAndParams()
+        val utteranceId = "glow_seg_$index"
         val params = Bundle().apply {
-            putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "glow_seg_$index")
+            putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, utteranceId)
         }
-        androidTts?.speak(seg.text, TextToSpeech.QUEUE_FLUSH, params, "glow_seg_$index")
+        androidTts?.speak(seg.text, TextToSpeech.QUEUE_FLUSH, params, utteranceId)
     }
 
     fun stopPlayback() {
         isPlayingInternal = false
+        mainHandler.removeCallbacks(wordProgressRunnable)
         try {
             androidTts?.stop()
         } catch (_: Exception) {
@@ -324,7 +351,7 @@ class VoiceEngineManager(private val context: Context) {
                 initializeAndroidTts()
             }
             var waited = 0
-            while (!isTtsInitialized && waited < 4000) {
+            while (!isTtsInitialized && waited < 5000) {
                 kotlinx.coroutines.delay(100)
                 waited += 100
             }
@@ -335,38 +362,66 @@ class VoiceEngineManager(private val context: Context) {
         val safeId = "${bookTitle.hashCode()}_ch_${chapterIndex}_${System.currentTimeMillis()}"
         val dir = getAudioStorageDir()
         val wavFile = File(dir, "$safeId.wav")
+        val fallbackWavFile = File(context.cacheDir, "$safeId.wav")
         val syncFile = File(dir, "$safeId.sync.json")
         val segments = buildSentenceSegments(text)
+        val sampleText = text.take(3500)
 
-        val synthesisOk = suspendCoroutine { cont ->
-            withContextMainSafe {
-                applyVoiceAndParams()
-                val utteranceId = "synth_$safeId"
-                engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                    override fun onStart(id: String?) {}
-                    override fun onDone(id: String?) {
-                        if (id == utteranceId) {
-                            cont.resume(true)
+        fun trySynthesizeToTarget(targetFile: File): Boolean = runCatching {
+            if (targetFile.exists()) targetFile.delete()
+            targetFile.parentFile?.mkdirs()
+            false
+        }.let {
+            suspendCoroutine<Boolean> { cont ->
+                mainHandler.post {
+                    applyVoiceAndParams()
+                    val utteranceId = "synth_${targetFile.name}_${System.nanoTime()}"
+                    engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                        override fun onStart(id: String?) {}
+                        override fun onDone(id: String?) {
+                            if (id == utteranceId) {
+                                mainHandler.post {
+                                    engine.setOnUtteranceProgressListener(playbackUtteranceListener)
+                                }
+                                cont.resume(true)
+                            }
                         }
-                    }
 
-                    @Deprecated("Deprecated in Java")
-                    override fun onError(id: String?) {
-                        if (id == utteranceId) {
-                            cont.resume(false)
+                        @Deprecated("Deprecated in Java")
+                        override fun onError(id: String?) {
+                            if (id == utteranceId) {
+                                mainHandler.post {
+                                    engine.setOnUtteranceProgressListener(playbackUtteranceListener)
+                                }
+                                cont.resume(false)
+                            }
                         }
+                    })
+                    val bundle = Bundle()
+                    val res = engine.synthesizeToFile(sampleText, bundle, targetFile, utteranceId)
+                    if (res != TextToSpeech.SUCCESS) {
+                        engine.setOnUtteranceProgressListener(playbackUtteranceListener)
+                        cont.resume(false)
                     }
-                })
-                val bundle = Bundle()
-                val res = engine.synthesizeToFile(text.take(3800), bundle, wavFile, utteranceId)
-                if (res != TextToSpeech.SUCCESS) {
-                    cont.resume(false)
                 }
             }
         }
 
-        if (!synthesisOk || !wavFile.exists() || wavFile.length() == 0L) {
-            return@withContext Result.failure(IllegalStateException("Não foi possível exportar o ficheiro de áudio."))
+        val primaryOk = trySynthesizeToTarget(wavFile)
+        val finalAudioFile = when {
+            primaryOk && wavFile.exists() && wavFile.length() > 0L -> wavFile
+            trySynthesizeToTarget(fallbackWavFile) && fallbackWavFile.exists() && fallbackWavFile.length() > 0L -> {
+                fallbackWavFile.copyTo(wavFile, overwrite = true)
+                fallbackWavFile.delete()
+                wavFile
+            }
+            else -> null
+        }
+
+        if (finalAudioFile == null || !finalAudioFile.exists() || finalAudioFile.length() == 0L) {
+            return@withContext Result.failure(
+                IllegalStateException("O motor TTS do aparelho não permitiu exportar o ficheiro de áudio.")
+            )
         }
 
         val track = SavedAudioTrack(
@@ -374,17 +429,13 @@ class VoiceEngineManager(private val context: Context) {
             bookTitle = bookTitle,
             chapterIndex = chapterIndex,
             chapterTitle = chapterTitle,
-            audioFilePath = wavFile.absolutePath,
+            audioFilePath = finalAudioFile.absolutePath,
             syncFilePath = syncFile.absolutePath,
             createdAt = System.currentTimeMillis(),
             segments = segments
         )
         writeSyncManifest(track)
         Result.success(track)
-    }
-
-    private fun withContextMainSafe(block: () -> Unit) {
-        android.os.Handler(context.mainLooper).post(block)
     }
 
     private fun writeSyncManifest(track: SavedAudioTrack) {
@@ -480,7 +531,7 @@ class VoiceEngineManager(private val context: Context) {
             onTickPositionMs(0, mp.duration.coerceAtLeast(0))
         }
 
-        android.os.Handler(context.mainLooper).post(object : Runnable {
+        mainHandler.post(object : Runnable {
             override fun run() {
                 val player = mediaPlayer
                 if (!isPlayingInternal || player == null) return
@@ -498,7 +549,7 @@ class VoiceEngineManager(private val context: Context) {
                             val frac = ((posMs - matched.estimatedStartMs).toFloat() / span).coerceIn(0f, 1f)
                             onWordRange(estimateWordRangeInSegment(matched, frac))
                         }
-                        android.os.Handler(context.mainLooper).postDelayed(this, 140L)
+                        mainHandler.postDelayed(this, 140L)
                     }
                 } catch (_: Exception) {
                 }
