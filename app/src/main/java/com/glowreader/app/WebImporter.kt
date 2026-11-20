@@ -27,9 +27,9 @@ object WebImporter {
         } else {
             "https://$trimmed"
         }
-        val uri = Uri.parse(withScheme)
-        val host = uri.host ?: return null
-        if (!host.contains('.')) return null
+        val uri = runCatching { Uri.parse(withScheme) }.getOrNull() ?: return null
+        val host = uri.host?.trim().orEmpty()
+        if (host.isEmpty() || !host.contains('.')) return null
         if (uri.scheme != "http" && uri.scheme != "https") return null
         return withScheme
     }
@@ -79,7 +79,8 @@ object WebImporter {
                 )
             }
 
-            val title = extractTitle(html) ?: (Uri.parse(normalized).host ?: "Artigo da Web")
+            val fallbackHost = runCatching { Uri.parse(normalized).host }.getOrNull()
+            val title = extractTitle(html)?.ifBlank { null } ?: (fallbackHost ?: "Artigo da Web")
             val cleanedText = extractReadableText(html)
 
             if (cleanedText.length < 40) {
@@ -136,8 +137,9 @@ object WebImporter {
     private fun extractReadableText(html: String): String {
         var working = html
 
-        // Remove blocos que normalmente não são leitura principal
-        val blockTagsToRemove = listOf("script", "style", "noscript", "svg", "nav", "footer", "header", "aside", "form")
+        val blockTagsToRemove = listOf(
+            "script", "style", "noscript", "svg", "nav", "footer", "header", "aside", "form"
+        )
         for (tag in blockTagsToRemove) {
             working = working.replace(
                 Regex("<$tag\\b[^>]*>.*?</$tag>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)),
@@ -145,7 +147,6 @@ object WebImporter {
             )
         }
 
-        // Tenta focar em <article> ou <main> se existir conteúdo suficiente
         val articleMatch = Regex(
             """<(article|main)\b[^>]*>(.*?)</\1>""",
             setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
