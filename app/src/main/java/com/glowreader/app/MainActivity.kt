@@ -213,14 +213,14 @@ class MainActivity : ComponentActivity() {
 
             var savedBooks by remember { mutableStateOf(LibraryManager.loadLibrary(context)) }
             var orgMetaMap by remember {
-                mutableStateOf(LibraryOrganizationManager.ensureBooksRegistered(context, savedBooks))
+                mutableStateOf(LibraryOrganizationManager.loadAllMeta(context))
             }
-            var categories by remember { mutableStateOf(LibraryOrganizationManager.loadAllCategories(context)) }
+            var categories by remember { mutableStateOf(LibraryManager.loadAllCategories(context)) }
             var selectedCategory by remember { mutableStateOf("Todos") }
             var showSecretShelf by remember { mutableStateOf(false) }
             var librarySearchQuery by remember { mutableStateOf("") }
             var formatFilter by remember { mutableStateOf("Todos") }
-            var sortOption by remember { mutableStateOf(LibrarySortOption.RECENT_ORDER) }
+            var sortOption by remember { mutableStateOf(LibrarySortOption.RECENT) }
 
             var showAddCategoryDialog by remember { mutableStateOf(false) }
             var newCategoryName by remember { mutableStateOf("") }
@@ -282,10 +282,11 @@ class MainActivity : ComponentActivity() {
             var showSavedAudioSheet by remember { mutableStateOf(false) }
 
             fun refreshLibraryAndOrg() {
+                LibraryManager.ensureBooksRegistered(context)
                 val loaded = LibraryManager.loadLibrary(context)
                 savedBooks = loaded
-                orgMetaMap = LibraryOrganizationManager.ensureBooksRegistered(context, loaded)
-                categories = LibraryOrganizationManager.loadAllCategories(context)
+                orgMetaMap = LibraryOrganizationManager.loadAllMeta(context)
+                categories = LibraryManager.loadAllCategories(context)
                 libraryVersion++
             }
 
@@ -298,6 +299,7 @@ class MainActivity : ComponentActivity() {
             }
 
             LaunchedEffect(Unit) {
+                refreshLibraryAndOrg()
                 catalogRefreshTick++
                 voiceEngine.initializeAndroidTts { voices ->
                     availableVoices = voices
@@ -411,17 +413,17 @@ class MainActivity : ComponentActivity() {
             }
 
             fun requestSecretShelfAccess(bookToToggle: SavedBookMeta? = null) {
-                if (!LibraryOrganizationManager.hasSecretPin(context)) {
+                if (!LibraryManager.hasSecretPin(context)) {
                     pendingSecretBookToggle = bookToToggle
                     secretPinInput = ""
                     secretPinError = null
                     showSecretPinDialog = true
                     return
                 }
-                if (LibraryOrganizationManager.isSecretUnlocked(context)) {
+                if (LibraryManager.isSecretUnlocked(context)) {
                     if (bookToToggle != null) {
-                        orgMetaMap = LibraryOrganizationManager.toggleBookSecret(context, bookToToggle.id)
-                        libraryVersion++
+                        LibraryManager.toggleBookSecret(context, bookToToggle.id)
+                        refreshLibraryAndOrg()
                     } else {
                         showSecretShelf = !showSecretShelf
                     }
@@ -861,7 +863,8 @@ class MainActivity : ComponentActivity() {
                             colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color.White),
                             onClick = {
                                 if (newCategoryName.isNotBlank()) {
-                                    categories = LibraryOrganizationManager.addCustomCategory(context, newCategoryName)
+                                    LibraryManager.addCustomCategory(context, newCategoryName)
+                                    categories = LibraryManager.loadAllCategories(context)
                                     selectedCategory = newCategoryName.trim()
                                     newCategoryName = ""
                                 }
@@ -881,7 +884,7 @@ class MainActivity : ComponentActivity() {
 
             val bookForCat = categoryTargetBook
             if (bookForCat != null) {
-                val currentBookCat = orgMetaMap[bookForCat.id]?.category ?: "A ler"
+                val currentBookCat = bookForCat.folderName.ifBlank { "Geral" }
                 AlertDialog(
                     onDismissRequest = { categoryTargetBook = null },
                     containerColor = currentTheme.barBg,
@@ -901,15 +904,17 @@ class MainActivity : ComponentActivity() {
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clickable {
-                                            orgMetaMap = LibraryOrganizationManager.setBookCategory(context, bookForCat.id, cat)
+                                            LibraryManager.setBookCategory(context, bookForCat.id, cat)
+                                            refreshLibraryAndOrg()
                                             categoryTargetBook = null
                                         }
                                         .padding(vertical = 4.dp)
                                 ) {
                                     RadioButton(
-                                        selected = currentBookCat == cat,
+                                        selected = currentBookCat.equals(cat, ignoreCase = true),
                                         onClick = {
-                                            orgMetaMap = LibraryOrganizationManager.setBookCategory(context, bookForCat.id, cat)
+                                            LibraryManager.setBookCategory(context, bookForCat.id, cat)
+                                            refreshLibraryAndOrg()
                                             categoryTargetBook = null
                                         }
                                     )
@@ -927,7 +932,7 @@ class MainActivity : ComponentActivity() {
             }
 
             if (showSecretPinDialog) {
-                val pinAlreadySet = LibraryOrganizationManager.hasSecretPin(context)
+                val pinAlreadySet = LibraryManager.hasSecretPin(context)
                 AlertDialog(
                     onDismissRequest = {
                         showSecretPinDialog = false
@@ -971,10 +976,11 @@ class MainActivity : ComponentActivity() {
                             colors = ButtonDefaults.buttonColors(containerColor = currentTheme.accent, contentColor = Color.White),
                             onClick = {
                                 if (pinAlreadySet) {
-                                    if (LibraryOrganizationManager.verifySecretPin(context, secretPinInput)) {
+                                    if (LibraryManager.verifySecretPin(context, secretPinInput)) {
                                         val toggleTarget = pendingSecretBookToggle
                                         if (toggleTarget != null) {
-                                            orgMetaMap = LibraryOrganizationManager.toggleBookSecret(context, toggleTarget.id)
+                                            LibraryManager.toggleBookSecret(context, toggleTarget.id)
+                                            refreshLibraryAndOrg()
                                         } else {
                                             showSecretShelf = true
                                         }
@@ -984,10 +990,11 @@ class MainActivity : ComponentActivity() {
                                         secretPinError = "PIN incorreto."
                                     }
                                 } else {
-                                    if (LibraryOrganizationManager.setSecretPin(context, secretPinInput)) {
+                                    if (LibraryManager.setSecretPin(context, secretPinInput)) {
                                         val toggleTarget = pendingSecretBookToggle
                                         if (toggleTarget != null) {
-                                            orgMetaMap = LibraryOrganizationManager.toggleBookSecret(context, toggleTarget.id)
+                                            LibraryManager.toggleBookSecret(context, toggleTarget.id)
+                                            refreshLibraryAndOrg()
                                         } else {
                                             showSecretShelf = true
                                         }
@@ -3428,22 +3435,31 @@ class MainActivity : ComponentActivity() {
                                         CircularProgressIndicator(color = currentTheme.accent)
                                     }
                                 } else {
+                                    val secretBookIds = remember(savedBooks, libraryVersion) {
+                                        LibraryManager.getSecretBookIds(context)
+                                    }
+                                    val shelfFilteredBooks = remember(savedBooks, showSecretShelf, secretBookIds) {
+                                        if (showSecretShelf) {
+                                            savedBooks.filter { it.id in secretBookIds }
+                                        } else {
+                                            savedBooks.filterNot { it.id in secretBookIds }
+                                        }
+                                    }
                                     val visibleBooks = remember(
-                                        savedBooks,
+                                        shelfFilteredBooks,
+                                        orgMetaMap,
                                         selectedCategory,
-                                        showSecretShelf,
                                         librarySearchQuery,
                                         formatFilter,
                                         sortOption,
                                         libraryVersion
                                     ) {
                                         LibraryOrganizationManager.filterAndSortBooks(
-                                            context = context,
-                                            books = savedBooks,
-                                            selectedCategory = selectedCategory,
-                                            showSecretShelf = showSecretShelf,
-                                            searchQuery = librarySearchQuery,
-                                            formatFilter = formatFilter,
+                                            books = shelfFilteredBooks,
+                                            metaMap = orgMetaMap,
+                                            query = librarySearchQuery,
+                                            folderFilter = if (selectedCategory == "Todos") "Todos" else selectedCategory,
+                                            formatFilter = if (formatFilter == "Todos") "TODOS" else formatFilter,
                                             sortOption = sortOption
                                         )
                                     }
@@ -3454,8 +3470,8 @@ class MainActivity : ComponentActivity() {
                                     @Composable
                                     fun BookCardContent(book: SavedBookMeta, compact: Boolean) {
                                         val cleanTitle = remember(book.title) { formatCleanBookTitle(book.title) }
-                                        val metaOrg = orgMetaMap[book.id]
-                                        val progressPct = (LibraryOrganizationManager.estimateBookProgress(context, book) * 100).toInt()
+                                        val isSecretBook = book.id in secretBookIds
+                                        val progressPct = (LibraryManager.estimateBookProgress(book) * 100).toInt()
                                         val coverImageBitmap = remember(book.coverPath, book.id) {
                                             if (book.coverPath.isNotBlank()) {
                                                 val file = File(book.coverPath)
@@ -3560,7 +3576,7 @@ class MainActivity : ComponentActivity() {
                                                                 modifier = Modifier.size(26.dp)
                                                             ) {
                                                                 Icon(
-                                                                    imageVector = if (metaOrg?.isSecret == true) Icons.Rounded.LockOpen else Icons.Rounded.Lock,
+                                                                    imageVector = if (isSecretBook) Icons.Rounded.LockOpen else Icons.Rounded.Lock,
                                                                     contentDescription = "Estante secreta",
                                                                     tint = Color.White,
                                                                     modifier = Modifier.size(16.dp)
@@ -3596,7 +3612,7 @@ class MainActivity : ComponentActivity() {
                                                                 color = Color.Black.copy(alpha = 0.62f)
                                                             ) {
                                                                 Text(
-                                                                    text = metaOrg?.category ?: "A ler",
+                                                                    text = book.folderName.ifBlank { "Geral" },
                                                                     color = Color.White,
                                                                     fontSize = 10.sp,
                                                                     maxLines = 1,
@@ -3673,7 +3689,7 @@ class MainActivity : ComponentActivity() {
                                                         )
                                                         if (!compact) {
                                                             Text(
-                                                                text = "${book.format} • ${metaOrg?.category ?: "A ler"} • $progressPct%",
+                                                                text = "${book.format} • ${book.folderName.ifBlank { "Geral" }} • $progressPct%",
                                                                 fontSize = 12.sp,
                                                                 color = Color.White.copy(alpha = 0.8f),
                                                                 maxLines = 1,
@@ -3687,7 +3703,7 @@ class MainActivity : ComponentActivity() {
                                                         }
                                                         IconButton(onClick = { requestSecretShelfAccess(book) }) {
                                                             Icon(
-                                                                imageVector = if (metaOrg?.isSecret == true) Icons.Rounded.LockOpen else Icons.Rounded.Lock,
+                                                                imageVector = if (isSecretBook) Icons.Rounded.LockOpen else Icons.Rounded.Lock,
                                                                 contentDescription = "Estante secreta",
                                                                 tint = Color.White
                                                             )
@@ -4262,14 +4278,14 @@ class MainActivity : ComponentActivity() {
                                                 showSecretPinDialog = true
                                             }) {
                                                 Text(
-                                                    text = if (LibraryOrganizationManager.hasSecretPin(context)) "Alterar PIN" else "Definir PIN",
+                                                    text = if (LibraryManager.hasSecretPin(context)) "Alterar PIN" else "Definir PIN",
                                                     color = currentTheme.text,
                                                     maxLines = 1,
                                                     softWrap = false
                                                 )
                                             }
                                             OutlinedButton(onClick = {
-                                                LibraryOrganizationManager.lockSecretShelf(context)
+                                                LibraryManager.lockSecretShelf()
                                                 showSecretShelf = false
                                             }) {
                                                 Text("Bloquear estante", color = currentTheme.text, maxLines = 1, softWrap = false)
