@@ -32,24 +32,34 @@ object ReaderLayoutController {
 
     fun paginateChapter(content: String, charsPerPage: Int = 1400): List<String> {
         if (content.isBlank()) return listOf("")
+        val normalized = content.replace("\r\n", "\n").replace("\r", "\n")
         val safeSize = charsPerPage.coerceIn(500, 5000)
         val pages = mutableListOf<String>()
         var start = 0
-        while (start < content.length) {
-            val rawEnd = (start + safeSize).coerceAtMost(content.length)
+
+        while (start < normalized.length) {
+            val rawEnd = (start + safeSize).coerceAtMost(normalized.length)
             var end = rawEnd
-            if (rawEnd < content.length) {
-                val breakPos = content.lastIndexOfAny(charArrayOf('\n', ' '), startIndex = rawEnd - 1)
-                if (breakPos > start + (safeSize / 2)) {
-                    end = breakPos + 1
+            if (rawEnd < normalized.length) {
+                val minBreak = start + (safeSize / 2)
+                val paragraphBreak = normalized.lastIndexOf("\n\n", startIndex = rawEnd - 1)
+                val lineOrSpaceBreak = normalized.lastIndexOfAny(
+                    charArrayOf('\n', ' '),
+                    startIndex = rawEnd - 1
+                )
+                end = when {
+                    paragraphBreak >= minBreak -> paragraphBreak + 2
+                    lineOrSpaceBreak > minBreak -> lineOrSpaceBreak + 1
+                    else -> rawEnd
                 }
             }
-            val pageText = content.substring(start, end).trim()
+            val pageText = normalized.substring(start, end).trim()
             if (pageText.isNotEmpty()) {
                 pages.add(pageText)
             }
-            start = end
+            start = if (end > start) end else rawEnd
         }
-        return if (pages.isEmpty()) listOf(content) else pages
+
+        return if (pages.isEmpty()) listOf(normalized.trim()) else pages
     }
 }
