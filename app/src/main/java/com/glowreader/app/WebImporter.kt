@@ -1,6 +1,5 @@
 package com.glowreader.app
 
-import android.net.Uri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
@@ -19,19 +18,25 @@ object WebImporter {
 
     fun normalizeUrl(rawUrl: String): String? {
         val trimmed = rawUrl.trim()
-        if (trimmed.isEmpty()) return null
-        val withScheme = if (trimmed.startsWith("http://", ignoreCase = true) ||
+        if (trimmed.isEmpty() || trimmed.any { it.isWhitespace() }) return null
+        val withScheme = if (
+            trimmed.startsWith("http://", ignoreCase = true) ||
             trimmed.startsWith("https://", ignoreCase = true)
         ) {
             trimmed
         } else {
             "https://$trimmed"
         }
-        val uri = runCatching { Uri.parse(withScheme) }.getOrNull() ?: return null
-        val host = uri.host?.trim().orEmpty()
-        if (host.isEmpty() || !host.contains('.')) return null
-        if (uri.scheme != "http" && uri.scheme != "https") return null
-        return withScheme
+        return runCatching {
+            val u = URL(withScheme)
+            val proto = u.protocol.lowercase()
+            val host = u.host.orEmpty().trim()
+            if ((proto == "http" || proto == "https") && host.contains('.')) {
+                withScheme
+            } else {
+                null
+            }
+        }.getOrNull()
     }
 
     suspend fun importFromUrl(rawUrl: String): WebImportResult = withContext(Dispatchers.IO) {
@@ -79,7 +84,7 @@ object WebImporter {
                 )
             }
 
-            val fallbackHost = runCatching { Uri.parse(normalized).host }.getOrNull()
+            val fallbackHost = runCatching { URL(normalized).host }.getOrNull()
             val title = extractTitle(html)?.ifBlank { null } ?: (fallbackHost ?: "Artigo da Web")
             val cleanedText = extractReadableText(html)
 
@@ -114,19 +119,21 @@ object WebImporter {
     }
 
     private fun extractTitle(html: String): String? {
-        val ogMatch = Regex(
-            """<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']""",
+        val ogRegex = Regex(
+            "<meta[^>]+property=[\"']og:title[\"'][^>]+content=[\"']([^\"']+)[\"']",
             setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
-        ).find(html)
+        )
+        val ogMatch = ogRegex.find(html)
         if (ogMatch != null) {
             val cleaned = decodeHtmlEntities(ogMatch.groupValues[1]).trim()
             if (cleaned.isNotEmpty()) return cleaned
         }
 
-        val titleMatch = Regex(
-            """<title[^>]*>(.*?)</title>""",
+        val titleRegex = Regex(
+            "<title[^>]*>(.*?)</title>",
             setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
-        ).find(html)
+        )
+        val titleMatch = titleRegex.find(html)
         if (titleMatch != null) {
             val cleaned = decodeHtmlEntities(stripAllTags(titleMatch.groupValues[1])).trim()
             if (cleaned.isNotEmpty()) return cleaned
@@ -147,10 +154,11 @@ object WebImporter {
             )
         }
 
-        val articleMatch = Regex(
-            """<(article|main)\b[^>]*>(.*?)</\1>""",
+        val articleRegex = Regex(
+            "<(article|main)\\b[^>]*>(.*?)</\\1>",
             setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
-        ).find(working)
+        )
+        val articleMatch = articleRegex.find(working)
         if (articleMatch != null) {
             val candidate = decodeHtmlEntities(formatBlocksToLines(articleMatch.groupValues[2])).trim()
             if (candidate.length >= 200) {
@@ -163,9 +171,9 @@ object WebImporter {
 
         return decoded
             .replace("\r\n", "\n")
-            .replace(Regex("[ \t]+"), " ")
-            .replace(Regex(" *\n *"), "\n")
-            .replace(Regex("\n{3,}"), "\n\n")
+            .replace(Regex("[ \\t]+"), " ")
+            .replace(Regex(" *\\n *"), "\n")
+            .replace(Regex("\\n{3,}"), "\n\n")
             .trim()
     }
 
