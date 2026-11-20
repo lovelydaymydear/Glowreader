@@ -3,7 +3,6 @@ package com.glowreader.app
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
-import java.text.Normalizer
 
 enum class LibrarySortOption(val label: String) {
     RECENT("Recentes"),
@@ -122,11 +121,25 @@ object LibraryOrganizationManager {
     }
 
     fun normalizeTitleKey(title: String): String {
-        val decomposed = Normalizer.normalize(title.lowercase(), Normalizer.Form.NFD)
-        return decomposed
-            .replace(Regex("\\p{InCombiningDiacriticalMarks}+"), "")
-            .replace(Regex("[^a-z0-9]+"), " ")
-            .trim()
+        val sb = StringBuilder(title.length)
+        for (ch in title.lowercase()) {
+            val mapped = when (ch) {
+                'á', 'à', 'â', 'ã', 'ä' -> 'a'
+                'é', 'è', 'ê', 'ë' -> 'e'
+                'í', 'ì', 'î', 'ï' -> 'i'
+                'ó', 'ò', 'ô', 'õ', 'ö' -> 'o'
+                'ú', 'ù', 'û', 'ü' -> 'u'
+                'ç' -> 'c'
+                'ñ' -> 'n'
+                else -> ch
+            }
+            if (mapped in 'a'..'z' || mapped in '0'..'9') {
+                sb.append(mapped)
+            } else {
+                sb.append(' ')
+            }
+        }
+        return sb.toString().trim().replace(Regex("\\s+"), " ")
     }
 
     fun findDuplicateGroups(books: List<SavedBookMeta>): List<DuplicateBookGroup> {
