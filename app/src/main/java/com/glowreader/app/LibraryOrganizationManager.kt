@@ -3,20 +3,22 @@ package com.glowreader.app
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.File
+import java.text.Normalizer
 
 enum class LibrarySortOption(val label: String) {
-    RECENT_ORDER("Ordem atual"),
-    TITLE_ASC("Título (A–Z)"),
-    FORMAT("Formato"),
-    PROGRESS("Progresso")
+    RECENT("Recentes"),
+    TITLE_ASC("Título (A-Z)"),
+    TITLE_DESC("Título (Z-A)"),
+    PROGRESS_DESC("Progresso"),
+    FORMAT("Formato")
 }
 
 data class BookOrganizationMeta(
     val bookId: String,
-    val category: String = "A ler",
-    val isSecret: Boolean = false,
-    val addedAt: Long = 0L
+    val author: String = "",
+    val collectionName: String = "",
+    val tags: List<String> = emptyList(),
+    val isFavorite: Boolean = false
 )
 
 data class DuplicateBookGroup(
@@ -26,62 +28,38 @@ data class DuplicateBookGroup(
 
 object LibraryOrganizationManager {
 
-    private const val PREFS_NAME = "glowreader_library_org_prefs"
-    private const val KEY_ORG_JSON = "org_meta_json"
-    private const val KEY_CUSTOM_CATEGORIES = "custom_categories_json"
-    private const val KEY_SECRET_PIN = "secret_shelf_pin"
-    private const val KEY_SECRET_UNLOCKED = "secret_shelf_unlocked"
-
-    val defaultCategories = listOf("A ler", "Mais tarde", "Artigos")
+    private const val PREFS_NAME = "glowreader_org_prefs"
+    private const val KEY_META_LIST = "book_org_meta_json"
 
     private fun prefs(context: Context) =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    fun loadAllCategories(context: Context): List<String> {
-        val raw = prefs(context).getString(KEY_CUSTOM_CATEGORIES, null) ?: return defaultCategories
-        return try {
-            val arr = JSONArray(raw)
-            val custom = mutableListOf<String>()
-            for (i in 0 until arr.length()) {
-                val item = arr.optString(i).trim()
-                if (item.isNotEmpty() && item !in defaultCategories && item !in custom) {
-                    custom.add(item)
-                }
-            }
-            defaultCategories + custom
-        } catch (_: Exception) {
-            defaultCategories
-        }
-    }
+    fun loadAllMeta(context: Context): Map<String, BookOrganizationMeta> {
+        val raw = prefs(context).getString(KEY_META_LIST, null) ?: return emptyMap()
+        if (raw.isBlank()) return emptyMap()
 
-    fun addCustomCategory(context: Context, name: String): List<String> {
-        val clean = name.trim()
-        if (clean.isEmpty()) return loadAllCategories(context)
-        val current = loadAllCategories(context).toMutableList()
-        if (clean !in current) {
-            current.add(clean)
-            val customOnly = current.filterNot { it in defaultCategories }
-            prefs(context).edit().putString(KEY_CUSTOM_CATEGORIES, JSONArray(customOnly).toString()).apply()
-        }
-        return loadAllCategories(context)
-    }
-
-    fun loadMetaMap(context: Context): Map<String, BookOrganizationMeta> {
-        val raw = prefs(context).getString(KEY_ORG_JSON, null) ?: return emptyMap()
         return try {
             val arr = JSONArray(raw)
             val map = mutableMapOf<String, BookOrganizationMeta>()
             for (i in 0 until arr.length()) {
-                val obj = arr.getJSONObject(i)
-                val id = obj.optString("bookId")
-                if (id.isNotBlank()) {
-                    map[id] = BookOrganizationMeta(
-                        bookId = id,
-                        category = obj.optString("category", "A ler").ifBlank { "A ler" },
-                        isSecret = obj.optBoolean("isSecret", false),
-                        addedAt = obj.optLong("addedAt", 0L)
-                    )
+                val obj = arr.optJSONObject(i) ?: continue
+                val bookId = obj.optString("bookId", "").trim()
+                if (bookId.isEmpty()) continue
+                val tagsArr = obj.optJSONArray("tags") ?: JSONArray()
+                val tags = mutableListOf<String>()
+                for (t in 0 until tagsArr.length()) {
+                    val tag = tagsArr.optString(t, "").trim()
+                    if (tag.isNotEmpty() && !tags.any { it.equals(tag, ignoreCase = true) }) {
+                        tags.add(tag)
+                    }
                 }
+                map[bookId] = BookOrganizationMeta(
+                    bookId = bookId,
+                    author = obj.optString("author", "").trim(),
+                    collectionName = obj.optString("collectionName", "").trim(),
+                    tags = tags,
+                    isFavorite = obj.optBoolean("isFavorite", false)
+                )
             }
             map
         } catch (_: Exception) {
@@ -89,165 +67,148 @@ object LibraryOrganizationManager {
         }
     }
 
-    private fun saveMetaMap(context: Context, map: Map<String, BookOrganizationMeta>) {
+    private fun saveAllMeta(context: Context, map: Map<String, BookOrganizationMeta>) {
         val arr = JSONArray()
         map.values.forEach { meta ->
+            val tagsArr = JSONArray()
+            meta.tags.forEach { tagsArr.put(it) }
             arr.put(
                 JSONObject().apply {
                     put("bookId", meta.bookId)
-                    put("category", meta.category)
-                    put("isSecret", meta.isSecret)
-                    put("addedAt", meta.addedAt)
+                    put("author", meta.author)
+                    put("collectionName", meta.collectionName)
+                    put("tags", tagsArr)
+                    put("isFavorite", meta.isFavorite)
                 }
             )
         }
-        prefs(context).edit().putString(KEY_ORG_JSON, arr.toString()).apply()
+        prefs(context).edit().putString(KEY_META_LIST, arr.toString()).apply()
     }
 
-    fun ensureBooksRegistered(context: Context, books: List<SavedBookMeta>): Map<String, BookOrganizationMeta> {
-        val current = loadMetaMap(context).toMutableMap()
-        var changed = false
-        books.forEachIndexed { idx, book ->
-            if (!current.containsKey(book.id)) {
-                val inferredCategory = if (book.format.equals("WEB", ignoreCase = true)) "Artigos" else "A ler"
-                current[book.id] = BookOrganizationMeta(
-                    bookId = book.id,
-                    category = inferredCategory,
-                    isSecret = false,
-                    addedAt = System.currentTimeMillis() - idx * 1000L
-                )
-                changed = true
-            }
-        }
-        if (changed) {
-            saveMetaMap(context, current)
-        }
+    fun getMetaForBook(context: Context, bookId: String): BookOrganizationMeta {
+        return loadAllMeta(context)[bookId] ?: BookOrganizationMeta(bookId = bookId)
+    }
+
+    fun upsertBookMeta(context: Context, meta: BookOrganizationMeta): Map<String, BookOrganizationMeta> {
+        val current = loadAllMeta(context).toMutableMap()
+        current[meta.bookId] = meta.copy(
+            author = meta.author.trim(),
+            collectionName = meta.collectionName.trim(),
+            tags = meta.tags.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        )
+        saveAllMeta(context, current)
         return current
     }
 
-    fun setBookCategory(context: Context, bookId: String, category: String): Map<String, BookOrganizationMeta> {
-        val current = loadMetaMap(context).toMutableMap()
+    fun toggleFavorite(context: Context, bookId: String): Map<String, BookOrganizationMeta> {
+        val current = loadAllMeta(context).toMutableMap()
         val existing = current[bookId] ?: BookOrganizationMeta(bookId = bookId)
-        current[bookId] = existing.copy(category = category.ifBlank { "A ler" })
-        saveMetaMap(context, current)
+        current[bookId] = existing.copy(isFavorite = !existing.isFavorite)
+        saveAllMeta(context, current)
         return current
     }
 
-    fun toggleBookSecret(context: Context, bookId: String): Map<String, BookOrganizationMeta> {
-        val current = loadMetaMap(context).toMutableMap()
-        val existing = current[bookId] ?: BookOrganizationMeta(bookId = bookId)
-        current[bookId] = existing.copy(isSecret = !existing.isSecret)
-        saveMetaMap(context, current)
-        return current
-    }
-
-    fun hasSecretPin(context: Context): Boolean {
-        return !prefs(context).getString(KEY_SECRET_PIN, null).isNullOrBlank()
-    }
-
-    fun setSecretPin(context: Context, pin: String): Boolean {
-        val clean = pin.trim()
-        if (clean.length < 4) return false
-        prefs(context).edit()
-            .putString(KEY_SECRET_PIN, clean)
-            .putBoolean(KEY_SECRET_UNLOCKED, true)
-            .apply()
-        return true
-    }
-
-    fun verifySecretPin(context: Context, pin: String): Boolean {
-        val saved = prefs(context).getString(KEY_SECRET_PIN, null) ?: return false
-        val ok = saved == pin.trim()
-        if (ok) {
-            prefs(context).edit().putBoolean(KEY_SECRET_UNLOCKED, true).apply()
+    fun removeBookMeta(context: Context, bookId: String) {
+        val current = loadAllMeta(context).toMutableMap()
+        if (current.remove(bookId) != null) {
+            saveAllMeta(context, current)
         }
-        return ok
     }
 
-    fun isSecretUnlocked(context: Context): Boolean {
-        if (!hasSecretPin(context)) return true
-        return prefs(context).getBoolean(KEY_SECRET_UNLOCKED, false)
+    fun computeProgressFraction(book: SavedBookMeta): Float {
+        val total = book.totalChapters.coerceAtLeast(1)
+        val current = (book.lastChapterIndex + 1).coerceIn(0, total)
+        return (current.toFloat() / total.toFloat()).coerceIn(0f, 1f)
     }
 
-    fun lockSecretShelf(context: Context) {
-        prefs(context).edit().putBoolean(KEY_SECRET_UNLOCKED, false).apply()
-    }
-
-    fun normalizeTitle(title: String): String {
-        return title
-            .lowercase()
-            .replace(Regex("[^a-zà-ú0-9\\s]"), " ")
-            .replace(Regex("\\s+"), " ")
+    fun normalizeTitleKey(title: String): String {
+        val decomposed = Normalizer.normalize(title.lowercase(), Normalizer.Form.NFD)
+        return decomposed
+            .replace(Regex("\\p{InCombiningDiacriticalMarks}+"), "")
+            .replace(Regex("[^a-z0-9]+"), " ")
             .trim()
     }
 
     fun findDuplicateGroups(books: List<SavedBookMeta>): List<DuplicateBookGroup> {
-        val grouped = books.groupBy { normalizeTitle(it.title) }
-            .filter { (key, list) -> key.isNotBlank() && list.size > 1 }
-        return grouped.map { (key, list) ->
-            DuplicateBookGroup(normalizedKey = key, books = list)
-        }
+        return books
+            .mapNotNull { book ->
+                val key = normalizeTitleKey(book.title)
+                if (key.length < 3) null else key to book
+            }
+            .groupBy({ it.first }, { it.second })
+            .filter { it.value.size > 1 }
+            .map { (key, groupBooks) ->
+                DuplicateBookGroup(
+                    normalizedKey = key,
+                    books = groupBooks.sortedByDescending { it.lastOpened }
+                )
+            }
+            .sortedByDescending { it.books.size }
     }
 
     fun filterAndSortBooks(
-        context: Context,
         books: List<SavedBookMeta>,
-        selectedCategory: String,
-        showSecretShelf: Boolean,
-        searchQuery: String,
-        formatFilter: String,
-        sortOption: LibrarySortOption
+        metaMap: Map<String, BookOrganizationMeta>,
+        query: String = "",
+        folderFilter: String = "Todos",
+        formatFilter: String = "TODOS",
+        collectionFilter: String = "Todas",
+        tagFilter: String = "Todas",
+        onlyFavorites: Boolean = false,
+        sortOption: LibrarySortOption = LibrarySortOption.RECENT
     ): List<SavedBookMeta> {
-        val metaMap = ensureBooksRegistered(context, books)
-        val query = searchQuery.trim().lowercase()
+        val cleanQuery = normalizeTitleKey(query)
 
         val filtered = books.filter { book ->
-            val meta = metaMap[book.id] ?: BookOrganizationMeta(bookId = book.id)
-            if (showSecretShelf) {
-                if (!meta.isSecret) return@filter false
+            val meta = metaMap[book.id]
+
+            val matchesFolder = when {
+                folderFilter.isBlank() || folderFilter == "Todos" -> true
+                folderFilter.equals("Favoritos", ignoreCase = true) ->
+                    book.folderName.equals("Favoritos", ignoreCase = true) || (meta?.isFavorite == true)
+                else -> book.folderName.equals(folderFilter, ignoreCase = true)
+            }
+
+            val matchesFormat = formatFilter.isBlank() ||
+                formatFilter.equals("TODOS", ignoreCase = true) ||
+                book.format.equals(formatFilter, ignoreCase = true)
+
+            val matchesCollection = collectionFilter.isBlank() ||
+                collectionFilter == "Todas" ||
+                (meta?.collectionName.orEmpty().equals(collectionFilter, ignoreCase = true))
+
+            val matchesTag = tagFilter.isBlank() ||
+                tagFilter == "Todas" ||
+                (meta?.tags?.any { it.equals(tagFilter, ignoreCase = true) } == true)
+
+            val matchesFavorite = !onlyFavorites || (meta?.isFavorite == true) ||
+                book.folderName.equals("Favoritos", ignoreCase = true)
+
+            val matchesQuery = if (cleanQuery.isEmpty()) {
+                true
             } else {
-                if (meta.isSecret) return@filter false
-                if (selectedCategory != "Todos" && meta.category != selectedCategory) {
-                    return@filter false
-                }
+                val hayTitle = normalizeTitleKey(book.title).contains(cleanQuery)
+                val hayAuthor = normalizeTitleKey(meta?.author.orEmpty()).contains(cleanQuery)
+                val hayCollection = normalizeTitleKey(meta?.collectionName.orEmpty()).contains(cleanQuery)
+                val hayTags = meta?.tags?.any { normalizeTitleKey(it).contains(cleanQuery) } == true
+                hayTitle || hayAuthor || hayCollection || hayTags
             }
 
-            if (formatFilter != "Todos" && !book.format.equals(formatFilter, ignoreCase = true)) {
-                return@filter false
-            }
-
-            if (query.isNotEmpty()) {
-                val matchTitle = book.title.lowercase().contains(query)
-                val matchFormat = book.format.lowercase().contains(query)
-                val matchCategory = meta.category.lowercase().contains(query)
-                if (!matchTitle && !matchFormat && !matchCategory) return@filter false
-            }
-            true
+            matchesFolder && matchesFormat && matchesCollection && matchesTag && matchesFavorite && matchesQuery
         }
 
         return when (sortOption) {
-            LibrarySortOption.RECENT_ORDER -> filtered
-            LibrarySortOption.TITLE_ASC -> filtered.sortedBy { it.title.lowercase() }
-            LibrarySortOption.FORMAT -> filtered.sortedBy { it.format.lowercase() }
-            LibrarySortOption.PROGRESS -> filtered.sortedByDescending { book ->
-                val content = LibraryManager.loadBookContent(context, book.id)
-                val total = (content?.chapters?.size ?: 1).coerceAtLeast(1)
-                (book.lastChapterIndex + 1).toFloat() / total.toFloat()
-            }
-        }
-    }
-
-    fun estimateBookProgress(context: Context, book: SavedBookMeta): Float {
-        val content = LibraryManager.loadBookContent(context, book.id) ?: return 0f
-        val total = content.chapters.size.coerceAtLeast(1)
-        return ((book.lastChapterIndex + 1).toFloat() / total.toFloat()).coerceIn(0f, 1f)
-    }
-
-    fun deleteAudioFileIfExists(path: String) {
-        try {
-            val f = File(path)
-            if (f.exists()) f.delete()
-        } catch (_: Exception) {
+            LibrarySortOption.RECENT -> filtered.sortedByDescending { it.lastOpened }
+            LibrarySortOption.TITLE_ASC -> filtered.sortedBy { normalizeTitleKey(it.title) }
+            LibrarySortOption.TITLE_DESC -> filtered.sortedByDescending { normalizeTitleKey(it.title) }
+            LibrarySortOption.PROGRESS_DESC -> filtered.sortedWith(
+                compareByDescending<SavedBookMeta> { computeProgressFraction(it) }
+                    .thenByDescending { it.lastOpened }
+            )
+            LibrarySortOption.FORMAT -> filtered.sortedWith(
+                compareBy<SavedBookMeta> { it.format.uppercase() }
+                    .thenBy { normalizeTitleKey(it.title) }
+            )
         }
     }
 }
