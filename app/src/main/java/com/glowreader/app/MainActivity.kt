@@ -105,6 +105,29 @@ private fun formatCleanBookTitle(rawTitle: String): String {
         .ifBlank { "Livro" }
 }
 
+private fun findBestMatchRange(haystack: String, needle: String, hintIndex: Int = 0): IntRange? {
+    val cleanNeedle = needle.trim()
+    if (cleanNeedle.isEmpty() || haystack.isEmpty()) return null
+
+    val exactIdx = haystack.indexOf(cleanNeedle, startIndex = hintIndex.coerceIn(0, haystack.lastIndex))
+    if (exactIdx >= 0) {
+        return exactIdx until (exactIdx + cleanNeedle.length).coerceAtMost(haystack.length)
+    }
+
+    val anyExactIdx = haystack.indexOf(cleanNeedle)
+    if (anyExactIdx >= 0) {
+        return anyExactIdx until (anyExactIdx + cleanNeedle.length).coerceAtMost(haystack.length)
+    }
+
+    val normalizedNeedle = cleanNeedle.replace(Regex("\\s+"), " ")
+    val normAnyIdx = haystack.indexOf(normalizedNeedle)
+    if (normAnyIdx >= 0) {
+        return normAnyIdx until (normAnyIdx + normalizedNeedle.length).coerceAtMost(haystack.length)
+    }
+
+    return null
+}
+
 private fun buildInAppToolUrl(
     toolType: String,
     query: String,
@@ -275,6 +298,7 @@ class MainActivity : ComponentActivity() {
             var sleepTimerMinutes by remember { mutableIntStateOf(0) }
             var activeSentenceRange by remember { mutableStateOf<IntRange?>(null) }
             var activeWordRange by remember { mutableStateOf<IntRange?>(null) }
+            var playbackOffsetInChapter by remember { mutableIntStateOf(0) }
 
             var savedAudioTracks by remember { mutableStateOf(voiceEngine.listSavedAudioTracks()) }
             var audioStatusMessage by remember { mutableStateOf<String?>(null) }
@@ -332,13 +356,22 @@ class MainActivity : ComponentActivity() {
                 activeWordRange = null
             }
 
-            fun startAudio(text: String, onFinished: () -> Unit = {}) {
+            fun startAudio(text: String, baseOffset: Int = 0, onFinished: () -> Unit = {}) {
                 if (text.isBlank()) return
                 syncVoiceEngineConfig()
+                playbackOffsetInChapter = baseOffset.coerceAtLeast(0)
                 voiceEngine.startReadingText(
                     text = text,
-                    onSentenceRange = { range -> activeSentenceRange = range },
-                    onWordRange = { wRange -> activeWordRange = wRange },
+                    onSentenceRange = { range ->
+                        activeSentenceRange = range?.let {
+                            (it.first + playbackOffsetInChapter)..(it.last + playbackOffsetInChapter)
+                        }
+                    },
+                    onWordRange = { wRange ->
+                        activeWordRange = wRange?.let {
+                            (it.first + playbackOffsetInChapter)..(it.last + playbackOffsetInChapter)
+                        }
+                    },
                     onPlaybackState = { playing -> isPlaying = playing },
                     onChapterFinished = onFinished
                 )
@@ -1235,11 +1268,13 @@ class MainActivity : ComponentActivity() {
 
                 var showTocSheet by remember { mutableStateOf(false) }
                 var showListenSheet by remember { mutableStateOf(false) }
+                var showSpeedOnlySheet by remember { mutableStateOf(false) }
                 var listenSheetTab by remember { mutableIntStateOf(0) }
                 var showTypeSheet by remember { mutableStateOf(false) }
                 var showNotebookSheet by remember { mutableStateOf(false) }
                 var showNoteDialog by remember { mutableStateOf(false) }
                 var draftSelection by remember { mutableStateOf("") }
+                var draftSelectionStartHint by remember { mutableIntStateOf(0) }
                 var draftNote by remember { mutableStateOf("") }
                 var draftUnderline by remember { mutableStateOf(false) }
                 var showStudyBanner by remember { mutableStateOf(false) }
@@ -1249,6 +1284,63 @@ class MainActivity : ComponentActivity() {
                         barsVisible = false
                         showStudyBanner = false
                     }
+                }
+
+                fun computeCurrentReadingStartOffset(): Int {
+                    if (textContent.isEmpty()) return 0
+                    return if (readingViewMode == ReadingViewMode.SCROLL) {
+                        if (scrollState.maxValue <= 0 || scrollState.value <= 0) {
+                            0
+                        } else {
+                            val ratio = (scrollState.value.toFloat() / scrollState.maxValue.toFloat()).coerceIn(0f, 1f)
+                            val approxIdx = (ratio * textContent.length).toInt().coerceIn(0, textContent.lastIndex)
+                            val sentenceStart = textContent.lastIndexOfAny(charArrayOf('.', '!', '?', '\n'), startIndex = approxIdx)
+                            if (sentenceStart >= 0 && sentenceStart + 1 < textContent.length) {
+                                sentenceStart + 1
+                            } else {
+                                approxIdx
+                            }
+                        }
+                    } else {
+                        if (pages.isEmpty() || currentPageIndex <= 0) {
+                            0
+                        } else {
+                            val pageStart = textContent.indexOf(pages[currentPageIndex])
+                            if (pageStart >= 0) pageStart else 0
+                        }
+                    }
+                }
+
+                fun startReadingFromCurrentPosition() {
+                    if (textContent.isBlank()) return
+                    val startOffset = computeCurrentReadingStartOffset()
+                    val sliceToRead = if (startOffset in 0 until textContent.length) {
+                        textContent.substring(startOffset)
+                    } else {
+                        textContent
+                    }
+                    startAudio(
+                        text = sliceToRead,
+                        baseOffset = startOffset,
+                        onFinished = {
+                            if (readingViewMode == ReadingViewMode.SCROLL && currentChapterIndex < currentBook.chapters.lastIndex) {
+                                currentChapterIndex++
+                                currentPageIndex = 0
+                                scope.launch {
+                                    scrollState.scrollTo(0)
+                                    val nextChapterText = currentBook.chapters.getOrNull(currentChapterIndex)?.content.orEmpty()
+                                    val nextReflowed = ReadingEnhancementManager.applyReflow(nextChapterText, activeReflowMode)
+                                    if (nextReflowed.isNotBlank()) {
+                                        startAudio(nextReflowed, baseOffset = 0)
+                                    }
+                                }
+                            } else {
+                                isPlaying = false
+                                activeSentenceRange = null
+                                activeWordRange = null
+                            }
+                        }
+                    )
                 }
 
                 fun closeReaderBackToLibrary() {
@@ -1269,6 +1361,7 @@ class MainActivity : ComponentActivity() {
                         showNoteDialog -> showNoteDialog = false
                         showTranslateSheet -> if (!isTranslating) showTranslateSheet = false
                         showSavedAudioSheet -> showSavedAudioSheet = false
+                        showSpeedOnlySheet -> showSpeedOnlySheet = false
                         showListenSheet -> showListenSheet = false
                         showTypeSheet -> showTypeSheet = false
                         showNotebookSheet -> showNotebookSheet = false
@@ -1348,7 +1441,7 @@ class MainActivity : ComponentActivity() {
                                         speechRate = (speechRate - 0.25f).coerceIn(0.5f, 2.5f)
                                         if (isPlaying) {
                                             stopAudio()
-                                            startAudio(textContent)
+                                            startReadingFromCurrentPosition()
                                         }
                                     }
                             ) {
@@ -1371,7 +1464,7 @@ class MainActivity : ComponentActivity() {
                                         speechRate = (speechRate + 0.25f).coerceIn(0.5f, 2.5f)
                                         if (isPlaying) {
                                             stopAudio()
-                                            startAudio(textContent)
+                                            startReadingFromCurrentPosition()
                                         }
                                     }
                             ) {
@@ -1403,7 +1496,7 @@ class MainActivity : ComponentActivity() {
                                                 speechRate = rateOpt
                                                 if (isPlaying) {
                                                     stopAudio()
-                                                    startAudio(textContent)
+                                                    startReadingFromCurrentPosition()
                                                 }
                                             }
                                             .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -1433,6 +1526,25 @@ class MainActivity : ComponentActivity() {
                                 onCheckedChange = { forThisBookOnly = it },
                                 colors = SwitchDefaults.colors(checkedTrackColor = ReaderTealAccent)
                             )
+                        }
+                    }
+                }
+
+                if (showSpeedOnlySheet) {
+                    ModalBottomSheet(
+                        onDismissRequest = { showSpeedOnlySheet = false },
+                        containerColor = ReaderDarkSheet,
+                        dragHandle = null
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 20.dp, vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            SheetHandle()
+                            SpeedSectionContent()
+                            Spacer(modifier = Modifier.height(14.dp))
                         }
                     }
                 }
@@ -1604,6 +1716,18 @@ class MainActivity : ComponentActivity() {
                                                 )
                                             }
                                         }
+                                    }
+
+                                    OutlinedButton(
+                                        onClick = {
+                                            showListenSheet = false
+                                            showSavedAudioSheet = true
+                                        },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Icon(Icons.Rounded.AudioFile, contentDescription = null, tint = ReaderTealAccent)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Baixar / Áudios guardados (${savedAudioTracks.size})", color = Color(0xFFE3ECE7), maxLines = 1, softWrap = false)
                                     }
                                 }
                             } else {
@@ -1856,6 +1980,7 @@ class MainActivity : ComponentActivity() {
                                                         currentChapterIndex = track.chapterIndex
                                                     }
                                                     showSavedAudioSheet = false
+                                                    playbackOffsetInChapter = 0
                                                     voiceEngine.playSavedTrackWithSync(
                                                         track = track,
                                                         onSentenceRange = { activeSentenceRange = it },
@@ -2457,9 +2582,11 @@ class MainActivity : ComponentActivity() {
                                 ) {
                                     if (draftSelection.isNotBlank()) {
                                         OutlinedButton(onClick = {
+                                            val sel = draftSelection
+                                            val matchRange = findBestMatchRange(textContent, sel, draftSelectionStartHint)
                                             showNoteDialog = false
                                             showStudyBanner = false
-                                            startAudio(draftSelection)
+                                            startAudio(sel, baseOffset = matchRange?.first ?: 0)
                                         }) {
                                             Icon(Icons.Rounded.VolumeUp, contentDescription = null, tint = ReaderTealAccent)
                                             Spacer(modifier = Modifier.width(4.dp))
@@ -2576,7 +2703,8 @@ class MainActivity : ComponentActivity() {
                     currentBook.title,
                     currentChapterIndex,
                     activeChapter.title,
-                    selectedColorKey
+                    selectedColorKey,
+                    scrollState.value
                 ) {
                     object : TextToolbar {
                         override var status: TextToolbarStatus = TextToolbarStatus.Hidden
@@ -2589,10 +2717,10 @@ class MainActivity : ComponentActivity() {
                             onSelectAllRequested: (() -> Unit)?
                         ) {
                             status = TextToolbarStatus.Shown
-                            onCopyRequested?.invoke()
                             val clipNow = clipboard.getText()?.text ?: ""
                             if (clipNow.isNotBlank()) {
                                 draftSelection = clipNow
+                                draftSelectionStartHint = computeCurrentReadingStartOffset()
                                 showStudyBanner = true
                             }
                         }
@@ -2728,16 +2856,16 @@ class MainActivity : ComponentActivity() {
                                 append(displayedText)
                                 bookAnnotations.forEach { ann ->
                                     if (ann.selectedText.isNotBlank()) {
-                                        val idx = displayedText.indexOf(ann.selectedText)
-                                        if (idx >= 0) {
+                                        val match = findBestMatchRange(displayedText, ann.selectedText)
+                                        if (match != null) {
                                             val c = ReadingEnhancementManager.resolveColorByNameOrArgb(context, ann.colorName)
                                             addStyle(
                                                 SpanStyle(
                                                     background = c.copy(alpha = 0.6f),
                                                     textDecoration = if (ann.isUnderline) TextDecoration.Underline else TextDecoration.None
                                                 ),
-                                                idx,
-                                                (idx + ann.selectedText.length).coerceAtMost(length)
+                                                match.first,
+                                                (match.last + 1).coerceAtMost(length)
                                             )
                                         }
                                     }
@@ -2782,8 +2910,8 @@ class MainActivity : ComponentActivity() {
                                     ) {
                                         if (barsBehaviorMode == BarsBehaviorMode.TAP_TO_TOGGLE) {
                                             barsVisible = !barsVisible
-                                        } else if (barsBehaviorMode == BarsBehaviorMode.HIDE_ON_ADVANCE && barsVisible) {
-                                            barsVisible = false
+                                        } else if (barsBehaviorMode == BarsBehaviorMode.HIDE_ON_ADVANCE) {
+                                            barsVisible = !barsVisible
                                         }
                                     }
                                 ) {
@@ -2909,8 +3037,10 @@ class MainActivity : ComponentActivity() {
                                     }
                                     IconButton(
                                         onClick = {
+                                            val sel = draftSelection
+                                            val matchRange = findBestMatchRange(textContent, sel, draftSelectionStartHint)
                                             showStudyBanner = false
-                                            startAudio(draftSelection)
+                                            startAudio(sel, baseOffset = matchRange?.first ?: 0)
                                         },
                                         modifier = Modifier.size(32.dp)
                                     ) {
@@ -2972,10 +3102,7 @@ class MainActivity : ComponentActivity() {
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     TextButton(
-                                        onClick = {
-                                            listenSheetTab = 0
-                                            showListenSheet = true
-                                        },
+                                        onClick = { showSpeedOnlySheet = true },
                                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                                     ) {
                                         Text(
@@ -3008,7 +3135,7 @@ class MainActivity : ComponentActivity() {
                                         modifier = Modifier
                                             .size(52.dp)
                                             .clickable {
-                                                if (isPlaying) stopAudio() else startAudio(textContent)
+                                                if (isPlaying) stopAudio() else startReadingFromCurrentPosition()
                                             }
                                     ) {
                                         Box(contentAlignment = Alignment.Center) {
